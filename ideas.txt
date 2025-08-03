@@ -1,0 +1,11 @@
+
+
+ACUTION THEORY
+https://en.wikipedia.org/wiki/First-price_sealed-bid_auction
+https://www.numberanalytics.com/blog/auction-theory-math-econ-guide#introduction-to-auction-theory
+
+AUCTION TYPES
+English Auctions: Open ascending-bid auctions where participants continue to bid until no higher bids are offered.
+Dutch Auctions: Open descending-bid auctions where the price is gradually lowered until a buyer accepts the current price.
+Sealed-Bid Auctions: Bidders submit one bid without knowledge of the others’ bids. Common types include first-price and second-price (Vickrey) auctions.
+Combinatorial Auctions: Auctions where bidders can place bids on combinations of items rather than individual items, often used for complex goods like spectrum licenses.
