@@ -48,7 +48,7 @@ class PCAmarket:
             ]
 
     def add_order(self, price: float, volume: float, bid: bool, dt: time, ownerid: int):
-        assert self.state == 0, AssertionError()
+        assert self.state == 1, AssertionError()
         if self.order_book.empty:
             self.order_book = pd.DataFrame([
                 [price, volume, 0 if bid else 1, dt, ownerid, 0]
@@ -71,13 +71,34 @@ class PCAmarket:
         self.current_time = (datetime.combine(date.today(), self.current_time) + delta).time()
         self.check_state()
 
+    def get_stats_of_participant(self, part_id: int):
+        return self.participants[self.participants['ID'] == part_id]
+    
+    def all_part_ids(self):
+        for idx, row in self.participants.iterrows():
+            yield row['ID']
+    
+    def cancel_order(self, order_id: int, part_id: int):
+        assert self.state == 1, AssertionError()
+        order = self.order_book.loc[self.order_book['OrderID'] == order_id]
+        assert not order.empty, AssertionError()
+        assert order['OwnerID'] == part_id, AssertionError()
+        self.order_book.loc[self.order_book['OrderID'] != order_id]
+
+    def modify_order(self, order_id: int, part_id: int, add_volume: float):
+        assert self.state == 1, AssertionError()
+        order = self.order_book.loc[self.order_book['OrderID'] == order_id]
+        assert not order.empty, AssertionError()
+        assert order['OwnerID'] == part_id, AssertionError()
+        self.order_book.loc[self.order_book['OrderID'] == order_id, 'Volume'] += add_volume
+
     def determine_open_price(self):
         """
         -Collect all orders of the market session, ascending / descending dep. on buy/sell
         -Find matching volume
         -Determine open price
         """
-        assert self.state == 1, AssertionError()
+        assert self.state == 2, AssertionError()
 
         bids = self.order_book[self.order_book['Bid/Ask'] == 0][
             ['Price', 'Volume', 'OwnerID', 'OrderID']
@@ -118,9 +139,9 @@ class PCAmarket:
         self.open_price = y['Price'][np.argmax(y['MatchedVol'].values)]
         self.exec_table = y
 
-    def start_trade_period(self):
+    def execute_trades(self):
         """Executing trades and clearing order book"""
-        assert self.state == 1, AssertionError("incorrect time to start trading")
+        assert self.state == 2, AssertionError("incorrect time to start trading")
         print(self.order_book)
         for idx, row in self.exec_table.iterrows():
             while (

@@ -50,10 +50,15 @@ def main():
     # begin trading period
     market.advance_time(timedelta(hours=2))
     market.determine_open_price() # determines open price of the entire trading session
-    market.start_trade_period() # executes trades
+    market.execute_trades() # executes trades
 
     # advance to buffer period
     market.advance_time(timedelta(hours=3))
+
+    for p in market.all_part_ids():
+        print('statistics:')
+        print(market.get_stats_of_participant(p))
+        print()
         
 
 if __name__ == '__main__':
