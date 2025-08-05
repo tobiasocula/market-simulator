@@ -6,13 +6,46 @@ from multiprocessing import Pool
 import os
 import asyncio
 import traceback
-from .classes import ContinuousMarket, Order, baseurl
-"""
-price-time priority
-"""
+from datetime import datetime, date, timedelta, time
+from pydantic import BaseModel
+from typing import Optional
+import numpy as np
 
+from typing import Optional
+from pydantic import BaseModel
 
+class rpInput(BaseModel):
+    amount: Optional[int] = None
 
+class MarketInitializer(BaseModel):
+    open_time: str
+    close_time: str
+    start_time: str
+
+    progress_step: float
+    sleep_step: float
+    ws_delay_step: float
+
+    init_open_price: float
+
+    participant_init_balances: list[int]
+
+class OrderRequest(BaseModel):
+    volume: int
+    buy: bool
+    participant_id: int
+    price: Optional[float] = None
+
+baseurl = "http://localhost:8000"
+
+async def start_market(app: FastAPI):
+    while True:
+        async with app.state.time_lock:
+            app.state.current_time = (
+                datetime.combine(date.today(), time.fromisoformat(app.state.current_time))
+                                + timedelta(seconds=app.state.progress_step)
+            ).time().isoformat()
+        await asyncio.sleep(app.state.sleep_step)
 
 
 # define the lifespan of the app
@@ -23,8 +56,23 @@ async def lifespan(app: FastAPI):
     # Startup: create multiprocessing pool
     worker_pool = Pool(processes=os.cpu_count())
 
-    app.state.market_lock = asyncio.Lock()
-    app.state.market = None
+    app.state.order_book_lock = asyncio.Lock()
+    app.state.time_lock = asyncio.Lock()
+    app.state.ws_lock = asyncio.Lock()
+
+    app.state.open_time = None
+    app.state.close_time = None
+    app.state.start_time = None
+    app.state.progress_step = None
+    app.state.sleep_step = None
+    app.state.ws_delay_step = None
+    app.state.current_time = None
+    app.state.participants = [] # dict with init_balance, balance, id
+    app.state.order_book = pd.DataFrame()
+    app.state.current_price = None
+    app.state.num_participants = 0
+    app.state.num_orders_in_ob = 0
+    app.state.ws_connected = asyncio.Event()
 
     yield # Application starts serving requests here
 
@@ -35,77 +83,79 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan) # lifespan is an async context manager
 
-
-
 @app.post("/init_market")
-async def init_market(request: Request, market: ContinuousMarket):
+async def init_market(request: Request, market_init: MarketInitializer):
     try:
-        if request.app.state.market is not None:
-            return {"message": "cannot modify market again", "ok": False}
-        async with request.app.state.market_lock:
-            market._order_book = pd.DataFrame(columns=['Time', 'Buy', 'Price', 'Volume', 'PartID'])  # ← add this
-            request.app.state.market = market
+        async with app.state.order_book_lock, app.state.time_lock, app.state.ws_lock:
+
+            request.app.state.open_time = market_init.open_time
+            request.app.state.current_time = market_init.open_time
+            request.app.state.current_price = market_init.init_open_price
+            request.app.state.close_time = market_init.close_time
+            request.app.state.start_time = market_init.start_time
+            request.app.state.progress_step = market_init.progress_step
+            request.app.state.sleep_step = market_init.sleep_step
+            request.app.state.ws_delay_step = market_init.ws_delay_step
+
+            last_id = 0
+            for b in market_init.participant_init_balances:
+                app.state.participants.append({
+                    "init_balance": b,
+                    "balance": b,
+                    "id": last_id
+                })
+                last_id = last_id + 1
+                app.state.num_participants += 1
+
+            asyncio.create_task(start_market(app))
         return {"message": "Market initialized", "ok": True}
     except Exception as e:
         print("Error in /init_market:")
         traceback.print_exc()
         # Optionally send back error details for debugging (not for production)
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
-
-
+    
 
 @app.get("/ping")
 def ping():
     return {"message": "ok"}
 
 @app.post("/place_order")
-async def place_order(request: Request, order: Order):
+async def place_order(request: Request, order: OrderRequest):
 
     try:
-        async with request.app.state.market_lock:
-            assert hasattr(request.app.state.market, '_order_book'), AssertionError("no attr ob")
-            print(request.app.state.market._order_book)
-            #await asyncio.sleep(5)
-            if request.app.state.market._order_book.empty:
-                print('DATA:')
-                print([
-                    [
-                    order.time,
-                    0 if order.side == "buy" else 1,
-                    order.price,
-                    order.volume,
-                    order.participant_id
-                    ]
-                ])
-                ORDER_BOOK_COLUMNS = ['Time', 'Buy', 'Price', 'Volume', 'PartID']
+        async with request.app.state.order_book_lock:
                 
-                request.app.state.market._order_book = pd.DataFrame([
+            ORDER_BOOK_COLUMNS = ['Time', 'Buy', 'Price', 'Volume', 'PartID']
+            if app.state.order_book.empty:
+                app.state.order_book = pd.DataFrame([
                     [
-                    order.time,
-                    0 if order.side == "buy" else 1,
-                    order.price,
+                    app.state.current_time,
+                    0 if order.buy else 1,
+                    order.price if order.price is not None else app.state.current_price,
                     order.volume,
                     order.participant_id
                     ]
                 ], columns=ORDER_BOOK_COLUMNS)
-                print('MODIFIED DF')
             else:
                 new_row = pd.DataFrame([[
-                order.time,
-                0 if order.side == "buy" else 1,
-                order.price,
-                order.volume,
-                order.participant_id
-            ]], columns=ORDER_BOOK_COLUMNS)
-                request.app.state.market._order_book = pd.concat(
-                    [request.app.state.market._order_book, new_row],
+                    app.state.current_time,
+                    0 if order.buy else 1,
+                    order.price if order.price is not None else app.state.current_price,
+                    order.volume,
+                    order.participant_id
+                ]], columns=ORDER_BOOK_COLUMNS)
+                app.state.order_book = pd.concat(
+                    [app.state.order_book, new_row],
                     ignore_index=True
                 )
 
-            print("New row added:", request.app.state.market._order_book.tail(1))
+            app.state.num_orders_in_ob += 1
+
+            #print("New row added:", request.app.state.order_book.tail(1))
 
 
-        return {"message": "placed order"}
+        return {"message": "placed order", "ok": True}
 
     except Exception as e:
         print(f"Exception in place_order: {e}")
@@ -121,16 +171,44 @@ async def modify_order(orderid: int):
 async def modify_order(orderid: int):
     pass
 
-@app.get("/get_current_price")
-async def get_current_price(request: Request):
-    return {"result": request.app.market.current_price}
+@app.post("/wait_for_ws_connection")
+async def wait_for_ws_connection(request: Request):
+    while not request.app.state.ws_connected.is_set():
+        await asyncio.sleep(0.1)
+
+@app.post("/random_participants")
+async def random_participants(request: Request, inp: rpInput):
+    assert request.app.state.num_participants >= 1, AssertionError()
+    if inp.amount is None:
+        amount = np.random.randint(1, request.app.state.num_participants+1)
+    else:
+        amount = min(inp.amount, request.app.state.num_participants)
+    arr = np.random.randint(0, request.app.state.num_participants, amount)
+    return {
+        "ok": True,
+        "content": [request.app.state.participants[a]["id"] for a in arr]
+    }
 
 @app.websocket("/ws/marketdata")
 async def marketdata(websocket: WebSocket):
     await websocket.accept()
-    while True:
-        # Access shared state: use websocket.app.state
-        cp = websocket.app.state.market.current_price
-        ob = websocket.app.state.market.order_book_json()
-        await websocket.send_json({"current_price": cp, "order_book": ob})
-        await asyncio.sleep(1)  # to avoid tight loop
+    try:
+        async with websocket.app.state.ws_lock:
+            websocket.app.state.ws_connected.set()
+            print('set ws connected')
+        while True:
+            await websocket.send_json({
+                "current_time": websocket.app.state.current_time,
+                "order_book": websocket.app.state.order_book.to_json(),
+                "current_price": websocket.app.state.current_price,
+                "num_orders_in_ob": websocket.app.state.num_orders_in_ob,
+            })
+            await asyncio.sleep(websocket.app.state.ws_delay_step)
+    except asyncio.CancelledError:
+        print("Marketdata websocket handler cancelled")
+        # Optionally close websocket connection explicitly
+        await websocket.close()
+        raise
+    except Exception as e:
+        print(f"Unexpected error in websocket handler: {e}")
+        await websocket.close()
