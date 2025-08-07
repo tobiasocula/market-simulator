@@ -8,6 +8,7 @@ import websockets
 import json
 import sys
 import time as truetime
+import pandas as pd
 from .market import baseurl
 
 client = httpx.AsyncClient(timeout=30)
@@ -85,6 +86,7 @@ async def data_feed():
 
         # setting the event wakes up any coroutine waiting for an update
         market_ws_data_updated.set()
+        print("Received market update at", market_data["current_time"])
 
 async def send_order(p_id: int,
                      volume: int,
@@ -101,8 +103,12 @@ async def send_order(p_id: int,
                                             "participant_id": p_id,
                                             "price": price
                                         })
-        except:
-            print('FAILED TO SEND MARKET AT OPEN')
+            if resp.status_code == 200:
+                return
+            else:
+                raise RuntimeError(f"Unexpected status code {resp.status_code}: {resp}")
+        except Exception as e:
+            print('FAILED TO SEND MARKET AT OPEN', e)
     else:
         try:
             resp = await client.post(baseurl + "/place_order_bef_mo", 
@@ -112,28 +118,19 @@ async def send_order(p_id: int,
                                             "participant_id": p_id,
                                             "price": price
                                         })
-        except:
-            print('FAILED TO SEND ORDER BEFORE OPEN')
+            if resp.status_code == 200:
+                return
+            else:
+                raise RuntimeError(f"Unexpected status code {resp.status_code}: {resp}")
+        except Exception as e:
+            print(f'FAILED TO SEND ORDER BEFORE OPEN: {e}')
         
-    if resp.status_code == 200:
-        result = resp.json()
-        if result.get('ok'):
-            print("sent order")
-            return result.get("content")
-        else:
-            raise RuntimeError(f"Error: {result.get('message')}")
-    else:
-        raise RuntimeError(f"Unexpected status code {resp.status_code}: {resp}")
+    
 
 async def at_open():
     resp = await client.get(baseurl + "/at_open")
     if resp.status_code == 200:
-        result = resp.json()
-        if result.get('ok'):
-            print("matched orders")
-            return
-        else:
-            raise RuntimeError(f"Error: {result.get('message')}")
+        return
     else:
         raise RuntimeError(f"Unexpected status code {resp.status_code}: {resp}")
 
@@ -167,7 +164,7 @@ async def main_clock():
 
     bef_market_open = asyncio.create_task(trade_cycle(market_open=False))
     while True:
-
+        market_ws_data_updated.clear()
         await market_ws_data_updated.wait()
         market_ws_data_updated.clear()
         current_time_obj = datetime.strptime(market_ws_data["current_time"], "%H:%M:%S").time()
@@ -182,17 +179,24 @@ async def main_clock():
             break
 
     # determine open price
+    print("Calling at_open()...")
     await at_open()
+    print("Returned from at_open()")
+    market_ws_data_updated.clear()
     await market_ws_data_updated.wait()
-    print('order book at market open:'); print(market_ws_data['order_book'])
+    print('order book at market open:'); print(pd.read_json(market_ws_data['order_book']))
+    print('participants'); print(pd.read_json(market_ws_data['participants']))
 
+    
+
+    
     aft_market_open = asyncio.create_task(trade_cycle())
     while True:
-
+        market_ws_data_updated.clear()
         await market_ws_data_updated.wait()
         market_ws_data_updated.clear()
         current_time_obj = datetime.strptime(market_ws_data["current_time"], "%H:%M:%S").time()
-        close_time_obj = datetime.strptime(open_time, "%H:%M:%S").time()
+        close_time_obj = datetime.strptime(close_time, "%H:%M:%S").time()
 
         print(f"Current Time: {current_time_obj}")
 
@@ -200,6 +204,11 @@ async def main_clock():
             print("Breaking loop - market is closed")
             aft_market_open.cancel()
             break
+
+        print('FINAL ORDERBOOK:')
+        print(pd.read_json(market_ws_data['order_book']))
+        print('FINAL PARTICIPANTS:')
+        print(pd.read_json(market_ws_data['participants']))
 
 async def start():
 
@@ -228,9 +237,9 @@ async def start():
 if __name__ == '__main__':
 
     """Set params"""
-    start_time = "07:40:00"
+    start_time = "07:55:00"
     open_time = "08:00:00"
-    close_time = "17:00:00"
+    close_time = "08:20:00"
     
     init_open_price = 100.0
 
@@ -242,7 +251,7 @@ if __name__ == '__main__':
     sleep_step = 0.1 # amount of sec to wait in each progress tick
     ws_delay_step = 0.1 # amount of sec between each websocket response
 
-    init_balance = 10_000 # for every participant
+    init_balance = 10_000.0 # for every participant
     avg_trades_per_min = 20
     std_trades_per_min = 5
     avg_vol_per_trade = 10
@@ -250,7 +259,8 @@ if __name__ == '__main__':
     pct_market_orders = 0.5
     pct_buy_orders = 0.5
     
-    norm_price_dev = 10
+    norm_price_dev = 2
+    price_rounding_digits = 1
 
     # data we get from market websocket
     market_ws_data = None
@@ -264,7 +274,8 @@ if __name__ == '__main__':
         "sleep_step": sleep_step,
         "ws_delay_step": ws_delay_step,
         "init_open_price": init_open_price,
-        "participant_init_balances": [init_balance for _ in range(n_participants)]
+        "participant_init_balances": [init_balance for _ in range(n_participants)],
+        "price_rounding_digits": price_rounding_digits
     }
 
 

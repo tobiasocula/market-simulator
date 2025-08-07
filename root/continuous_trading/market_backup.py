@@ -18,6 +18,8 @@ from pydantic import BaseModel
 
 class rpInput(BaseModel):
     amount: Optional[int] = None
+    amount_rnd_lower: Optional[int] = None
+    amount_rnd_upper: Optional[int] = None
 
 class MarketInitializer(BaseModel):
     open_time: str
@@ -31,6 +33,8 @@ class MarketInitializer(BaseModel):
     init_open_price: float
 
     participant_init_balances: list[int]
+
+    price_rounding_digits: int
 
 class OrderRequest(BaseModel):
     volume: int
@@ -63,7 +67,6 @@ async def lifespan(app: FastAPI):
     app.state.ws_lock = asyncio.Lock()
     app.state.open_price_lock = asyncio.Lock()
     app.state.participants_lock = asyncio.Lock()
-    app.state.exec_table_lock = asyncio.Lock()
 
     app.state.open_time = None
     app.state.close_time = None
@@ -72,12 +75,11 @@ async def lifespan(app: FastAPI):
     app.state.ws_delay_step = None
     app.state.current_time = None
     app.state.participants = None
-    app.state.order_book = None
+    app.state.order_book = pd.DataFrame()
     app.state.current_price = None
     app.state.num_participants = 0
     app.state.num_orders_in_ob = 0
     app.state.ws_connected = asyncio.Event()
-    app.state.exec_table = None
 
     yield # Application starts serving requests here
 
@@ -89,19 +91,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan) # lifespan is an async context manager
 
 @app.post("/init_market")
-async def init_market(request: Request, market_init: MarketInitializer):
+async def init_market(market_init: MarketInitializer):
     try:
         async with app.state.time_lock:
-            request.app.state.current_time = market_init.start_time
+            app.state.current_time = market_init.start_time
         async with app.state.open_price_lock:
-            request.app.state.current_price = market_init.init_open_price
-        async with app.state.order_book_lock, app.state.ws_lock:
+            app.state.current_price = market_init.init_open_price
 
-            request.app.state.open_time = market_init.open_time
-            request.app.state.close_time = market_init.close_time
-            request.app.state.progress_step = market_init.progress_step
-            request.app.state.sleep_step = market_init.sleep_step
-            request.app.state.ws_delay_step = market_init.ws_delay_step
+        app.state.open_time = market_init.open_time
+        app.state.close_time = market_init.close_time
+        app.state.progress_step = market_init.progress_step
+        app.state.sleep_step = market_init.sleep_step
+        app.state.ws_delay_step = market_init.ws_delay_step
+        app.state.price_rounding_digits = market_init.price_rounding_digits
 
         npart = len(market_init.participant_init_balances)
         data = {
@@ -127,65 +129,199 @@ async def init_market(request: Request, market_init: MarketInitializer):
 def ping():
     return {"message": "ok"}
 
+
 @app.post("/place_order")
 async def place_order(order: OrderRequest):
+    try:
+        async with app.state.order_book_lock:
+
+            price = round(
+                order.price, ndigits=app.state.price_rounding_digits
+                ) if order.price is not None else round(
+                    app.state.current_price, ndigits=app.state.price_rounding_digits
+                )
+            if app.state.order_book.empty:
+                pass
+            else:
+                if order.buy:
+                    for idx, row in app.state.order_book.iterrows():
+                        if row["Price"] == price:
+                            
+                            if row["AskVol"] > 0:
+                                # execute trade
+                                # compare first occurence in askvols to order volume
+                                if row["AskVols"][0] > order.volume:
+                                    row["AskVols"][0] -= order.volume
+                                    # update participant states
+                                else:
+                                    row["AskVols"][0] = 0
+                                    # update participant states
+                            else:
+                                # append buy order to buys
+                                row["BidVols"].append(order.volume)
+                                row["BidOrderIDs"].append(app.state.num_orders_in_ob)
+                                row["BidVol"] += order.volume
+                                row["BidOwnerIDs"].append(order.participant_id)
+
+                                app.state.num_orders_in_ob += 1
+
+                            return
+
+                    # no price found -> append new order
+                    app.state.order_book = pd.concat([app.state.order_book, pd.DataFrame({
+                        "Price": [price],
+                        "AskVol": [0.0],
+                        "BidVol": [order.volume],
+                        "AskOrderIDs": [[app.state.num_orders_in_ob]],
+                        "BidOrderIDs": [[]],
+                        "AskOwnerIDs": [[order.participant_id]],
+                        "BidOwnerIDs": [[]],
+                        "MatchedVol": [0.0]
+                    })])
+
+                    app.state.num_orders_in_ob += 1
+
+                else: # sell order
+
+                    for idx, row in app.state.order_book.iterrows():
+                        if row["Price"] == price:
+                            
+                            if row["BidVol"] > 0:
+                                # execute trade
+                                # compare first occurence in askvols to order volume
+                                if row["BidVols"][0] > order.volume:
+                                    row["BidVols"][0] -= order.volume
+                                    # update participant states
+                                else:
+                                    row["BidVols"][0] = 0
+                                    # update participant states
+                            else:
+                                # append sell order to buys
+                                row["AskVols"].append(order.volume)
+                                row["AskOrderIDs"].append(app.state.num_orders_in_ob)
+                                row["AskVol"] += order.volume
+                                row["AskOwnerIDs"].append(order.participant_id)
+                                
+                                app.state.num_orders_in_ob += 1
+
+                            return
+
+                    # no price found -> append new order
+                    app.state.order_book = pd.concat([app.state.order_book, pd.DataFrame({
+                        "Price": [price],
+                        "AskVol": [order.volume],
+                        "BidVol": [0.0],
+                        "AskOrderIDs": [[app.state.num_orders_in_ob]],
+                        "BidOrderIDs": [[]],
+                        "AskOwnerIDs": [[order.participant_id]],
+                        "BidOwnerIDs": [[]],
+                        "MatchedVol": [0.0]
+                    })])
+
+                    app.state.num_orders_in_ob += 1
+
+    except:
+        raise
+
+async def participants(pid_bid: int,
+                       pid_ask: int,
+                       vol: int,
+                       price: float):
+
+    print(f"participants() start: bid={pid_bid}, ask={pid_ask}, vol={vol}, price={price}")
+
+    async with app.state.participants_lock:
+        print(f"participants() acquired lock: bid={pid_bid}, ask={pid_ask}")
+        app.state.participants.loc[
+            app.state.participants["id"] == pid_bid, ["balance", "asset_balance"]
+        ] += [-vol * price, vol]
+        app.state.participants.loc[
+            app.state.participants["id"] == pid_ask, ["balance", "asset_balance"]
+        ] += [vol * price, -vol]
+        print(f"participants() updated balances: bid={pid_bid}, ask={pid_ask}")
+    print(f"participants() end: bid={pid_bid}, ask={pid_ask}")
+
+@app.post("/place_order_bef_mo")
+async def place_order_bef_mo(order: OrderRequest):
 
     try:
         async with app.state.order_book_lock:
-                
-            ORDER_BOOK_COLUMNS = ['Time', 'Buy', 'Price', 'Volume', 'PartID', 'OrderID']
-            price = order.price if order.price is not None else app.state.current_price
-            if app.state.order_book is None:
-                app.state.order_book = pd.DataFrame([
-                    [
-                    app.state.current_time,
-                    0 if order.buy else 1,
-                    price,
-                    order.volume,
-                    order.participant_id,
-                    0 # first order
-                    ]
-                ], columns=ORDER_BOOK_COLUMNS)
-            else:
-                new_row = pd.DataFrame([[
-                    app.state.current_time,
-                    0 if order.buy else 1,
-                    price,
-                    order.volume,
-                    order.participant_id,
-                    len(app.state.order_book) # next order id
-                ]], columns=ORDER_BOOK_COLUMNS)
-                app.state.order_book = pd.concat(
-                    [app.state.order_book, new_row],
-                    ignore_index=True
+
+            price = round(
+                order.price, ndigits=app.state.price_rounding_digits
+                ) if order.price is not None else round(
+                    app.state.current_price, ndigits=app.state.price_rounding_digits
                 )
+            if app.state.order_book.empty:
+                if order.buy:
+                    app.state.order_book = pd.DataFrame({
+                        "Price": [price],
+                        "AskVols": [[]],
+                        "BidVols": [[order.volume]],
+                        "AskOrderIDs": [[]],
+                        "BidOrderIDs": [[0]],
+                        "AskOwnerIDs": [[]],
+                        "BidOwnerIDs": [[order.participant_id]],
+                        "MatchedVol": [0.0]
+                    })
+                else:
+                    app.state.order_book = pd.DataFrame({
+                        "Price": [price],
+                        "AskVols": [[order.volume]],
+                        "BidVols": [[]],
+                        "AskOrderIDs": [[0]], # first order 
+                        "BidOrderIDs": [[]],
+                        "AskOwnerIDs": [[order.participant_id]],
+                        "BidOwnerIDs": [[]],
+                        "MatchedVol": [0.0]
+                    })
 
-            app.state.num_orders_in_ob += 1
-
-        if app.state.current_time > app.state.open_time:
-            # modify exec table
-            async with app.state.exec_table_lock:
-                for idx, row in app.state.exec_table.iterrows():
-                    if app.state.exec_table.at[idx, "Price"] == price:
+            else:
+                
+                for idx, row in app.state.order_book.iterrows():
+                    if row["Price"] == price:
                         # insert order into stack
                         if order.buy:
-                            app.state.exec_table.at[idx, "BidOwnerIDs"].append(order.participant_id)
-                            app.state.exec_table.at[idx, "BidOrderIDs"].append(len(app.state.order_book))
-                            app.state.exec_table.at[idx, "BidVolumes"].append(order.volume)
-                            app.state.exec_table.at[idx, "BidVolume"] += order.volume
-                            app.state.exec_table['BidCumVol'] = app.state.exec_table['BidVolume'].cumsum()
+                            row["BidOwnerIDs"].append(order.participant_id)
+                            row["BidOrderIDs"].append(app.state.num_orders_in_ob)
+                            row["BidVols"].append(order.volume)
                         else:
-                            app.state.exec_table.at[idx, "AskOwnerIDs"].append(order.participant_id)
-                            app.state.exec_table.at[idx, "AskOrderIDs"].append(len(app.state.order_book))
-                            app.state.exec_table.at[idx, "AskVolumes"].append(order.volume)
-                            app.state.exec_table.at[idx, "AskVolume"] += order.volume
-                            app.state.exec_table['AskCumVol'] = app.state.exec_table['AskVolume'].cumsum()
-                        app.state.exec_table['MatchedVol'] = app.state.exec_table[
-                            ['AskCumVol', 'BidCumVol']].values.min(axis=1)
-                        return
+                            row["AskOwnerIDs"].append(order.participant_id)
+                            row["AskOrderIDs"].append(app.state.num_orders_in_ob)
+                            row["AskVols"].append(order.volume)
+                    
                 # outside for-loop: no price found
-                # means that order shouldn't get appended to exec table
-                return
+                # append order manually
+                if order.buy:
+                    app.state.order_book = pd.concat([app.state.order_book, pd.DataFrame({
+                        "Price": [price],
+                        "AskVols": [[]],
+                        "BidVols": [[order.volume]],
+                        "AskOrderIDs": [[]],
+                        "BidOrderIDs": [[app.state.num_orders_in_ob]],
+                        "AskOwnerIDs": [[]],
+                        "BidOwnerIDs": [[order.participant_id]],
+                        "MatchedVol": [0.0]
+                    })])
+                else:
+                    app.state.order_book = pd.concat([app.state.order_book, pd.DataFrame({
+                        "Price": [price],
+                        "AskVols": [[order.volume]],
+                        "BidVols": [[0.0]],
+                        "AskOrderIDs": [[app.state.num_orders_in_ob]], 
+                        "BidOrderIDs": [[]],
+                        "AskOwnerIDs": [[order.participant_id]],
+                        "BidOwnerIDs": [[]],
+                        "MatchedVol": [0.0]
+                    })])
+
+                app.state.order_book = app.state.order_book.reset_index(drop=True)
+                #app.state.order_book = app.state.order_book.sort_values(by='Price', ascending=True)
+
+            # new order added
+            app.state.num_orders_in_ob += 1
+
+            return
 
     except Exception as e:
         print(f"Exception in place_order: {e}")
@@ -201,98 +337,123 @@ async def modify_order(orderid: int):
 async def modify_order(orderid: int):
     pass
 
-@app.post("/wait_for_ws_connection")
-async def wait_for_ws_connection(request: Request):
-    while not request.app.state.ws_connected.is_set():
+@app.get("/wait_for_ws_connection")
+async def wait_for_ws_connection():
+    while not app.state.ws_connected.is_set():
         await asyncio.sleep(0.1)
 
 @app.post("/random_participants")
-async def random_participants(request: Request, inp: rpInput):
-    assert request.app.state.num_participants >= 1, AssertionError()
+async def random_participants(inp: rpInput):
+    assert app.state.num_participants >= 1, AssertionError()
     if inp.amount is None:
-        amount = np.random.randint(1, request.app.state.num_participants+1)
+        amount = np.random.randint(1, app.state.num_participants+1)
+    elif inp.amount_rnd_lower is not None and inp.amount_rnd_upper is not None:
+        amount = np.random.randint(inp.amount_rnd_lower, inp.amount_rnd_upper+1)
     else:
-        amount = min(inp.amount, request.app.state.num_participants)
-    arr = np.random.randint(0, request.app.state.num_participants, amount)
+        amount = min(inp.amount, app.state.num_participants)
+    arr = np.random.randint(0, app.state.num_participants, amount)
     return {
         "ok": True,
-        "content": [request.app.state.participants[a]["id"] for a in arr]
+        "content": [int(x) for x in app.state.participants.iloc[arr]['id'].values]
     }
 
 
 
-@app.post("/just_before_open")
-async def just_before_open(request: Request):
-    ob = request.app.state.order_book.reset_index().rename({'index': 'OrderID'}, axis=1)
+@app.get("/at_open")
+async def at_open():
 
-    bids = ob[ob['Buy'] == 0][['Price', 'Volume', 'PartID', 'OrderID']]
-    bids['BidVolumes'] = bids['Volume'].copy()
-    bids = bids.groupby('Price').agg({
-            'PartID': list,
-            'BidVolumes': list,
-            'OrderID': list,
-            'Volume': 'sum'
-        }).reset_index()
-    bids = bids.sort_values(by='Price', ascending=True)
-    bids['BidCumVol'] = bids['Volume'].cumsum()
-    #bids = bids.drop(['Volume'], axis=1)
-    bids = bids.rename({
-        'OwnerID': 'BidOwnerIDs',
-        'OrderID': 'BidOrderIDs',
-        'PartID': 'AskPartIDs',
-        'Volume': 'BidVolume'
-        }, axis=1)
+    # fill orders
+    participants_updating = []
+    try:
+        async with app.state.order_book_lock:
+            for idx, row in app.state.order_book.iterrows():
+            
+                while sum(row["BidVols"]) > 0 and sum(row["AskVols"]) > 0:
 
-    
-    asks = ob[ob['Buy'] == 0][['Price', 'Volume', 'PartID', 'OrderID']]
-    asks['AskVolumes'] = asks['Volume'].copy()
-    asks = asks.groupby('Price').agg({
-            'PartID': list,
-            'AskVolumes': list,
-            'OrderID': list,
-            'Volume': 'sum'
-        }).reset_index()
-    asks = asks.sort_values(by='Price', ascending=False)
-    asks['AskCumVol'] = asks['Volume'].cumsum()
-    #asks = asks.drop(['Volume'], axis=1)
-    asks = asks.rename({
-        'OwnerID': 'AskOwnerIDs',
-        'OrderID': 'AskOrderIDs',
-        'PartID': 'AskPartIDs',
-        'Volume': 'AskVolume'
-        }, axis=1)
+                    row["BidVols"] = [el for el in row["BidVols"] if el > 0]
+                    row["BidOrderIDs"] = [row["BidOrderIDs"][k] for k,r in enumerate(row["BidVols"]) if r > 0]
+                    row["BidOwnerIDs"] = [row["BidOwnerIDs"][k] for k,r in enumerate(row["BidVols"]) if r > 0]
 
-    x = set(asks['Price']).intersection(set(bids['Price']))
-    bids_f = bids[bids['Price'].isin(x)]
-    asks_f = asks[asks['Price'].isin(x)]
-    y = bids_f.merge(asks_f, on='Price').reset_index().drop(['index'], axis=1)
+                    row["AskVols"] = [el for el in row["AskVols"] if el > 0]
+                    row["AskOrderIDs"] = [row["AskOrderIDs"][k] for k,r in enumerate(row["AskVols"]) if r > 0]
+                    row["AskOwnerIDs"] = [row["AskOwnerIDs"][k] for k,r in enumerate(row["AskVols"]) if r > 0]
 
-    y['MatchedVol'] = y[['AskCumVol', 'BidCumVol']].values.min(axis=1)
-    open_price = y['Price'][np.argmax(y['MatchedVol'].values)]
-    
-    print('Y2:'); print(y)
-    print('open price:', open_price)
+                    if not row["BidVols"] or not row["AskVols"]:
+                        break
 
-    async with request.app.state.open_price_lock:
-        request.app.state.current_price = open_price
-    async with request.app.state.exec_table_lock:
-        request.app.state.exec_table = y
+                    if row["BidVols"][0] >= row["AskVols"][0]:
+                        row["BidVols"][0] -= row["AskVols"][0]
+
+                        participants_updating.append(asyncio.create_task(participants(
+                                pid_bid=row["BidOwnerIDs"][0],
+                                pid_ask=row["AskOwnerIDs"][0],
+                                vol=row["AskVols"][0],
+                                price=row["Price"]
+                        )))
+                        row["AskVols"][0] = 0
+
+                    else:
+                        row["AskVols"][0] -= row["BidVols"][0]
+
+                        participants_updating.append(asyncio.create_task(participants(
+                                pid_bid=row["BidOwnerIDs"][0],
+                                pid_ask=row["AskOwnerIDs"][0],
+                                vol=row["BidVols"][0],
+                                price=row["Price"]
+                        )))
+                        row["BidVols"][0] = 0
+
+            # recompute cumvol and matched vol
+            app.state.order_book['AskCumVol'] = (
+                                app.state.order_book['AskVols']
+                                    .apply(lambda x: sum(x))
+                                    .iloc[::-1]
+                                    .cumsum()
+                                    .iloc[::-1]
+                                )
+            app.state.order_book['BidCumVol'] = (
+                                app.state.order_book['BidVols']
+                                    .apply(lambda x: sum(x))
+                                    .cumsum()
+                                )
+            app.state.order_book["MatchedVol"] = (
+                app.state.order_book[["AskCumVol", "BidCumVol"]]
+                .values.min(axis=1)
+            )
+            
+            open_price = app.state.order_book['Price'][
+                np.argmax(app.state.order_book['MatchedVol'].values)
+                ]
+
+        async with app.state.open_price_lock:
+            app.state.current_price = open_price
+
+        print('CHECKPOINT1')
+
+        await asyncio.gather(*participants_updating)
+        print('CHECKPOINT2')
+        return
+
+    except Exception as e:
+        print('exception:', e)
+        raise
 
 @app.websocket("/ws/marketdata")
 async def marketdata(websocket: WebSocket):
     await websocket.accept()
     try:
-        async with websocket.app.state.ws_lock:
-            websocket.app.state.ws_connected.set()
+        async with app.state.ws_lock:
+            app.state.ws_connected.set()
             print('set ws connected')
         while True:
             await websocket.send_json({
-                "current_time": websocket.app.state.current_time,
-                "order_book": websocket.app.state.order_book.to_json(),
-                "current_price": websocket.app.state.current_price,
-                "num_orders_in_ob": websocket.app.state.num_orders_in_ob,
+                "current_time": app.state.current_time,
+                "order_book": app.state.order_book.to_json(),
+                "current_price": app.state.current_price,
+                "num_orders_in_ob": app.state.num_orders_in_ob,
+                "participants": app.state.participants.to_json()
             })
-            await asyncio.sleep(websocket.app.state.ws_delay_step)
+            await asyncio.sleep(app.state.ws_delay_step)
     except asyncio.CancelledError:
         print("Marketdata websocket handler cancelled")
         # Optionally close websocket connection explicitly
