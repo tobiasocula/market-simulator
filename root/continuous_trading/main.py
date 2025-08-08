@@ -179,17 +179,14 @@ async def main_clock():
             break
 
     # determine open price
-    print("Calling at_open()...")
+    #print("Calling at_open()...")
     await at_open()
-    print("Returned from at_open()")
+    #print("Returned from at_open()")
     market_ws_data_updated.clear()
     await market_ws_data_updated.wait()
-    print('order book at market open:'); print(pd.read_json(market_ws_data['order_book']))
-    print('participants'); print(pd.read_json(market_ws_data['participants']))
+    #print('order book at market open:'); print(pd.read_json(market_ws_data['order_book']))
+    #print('participants'); print(pd.read_json(market_ws_data['participants']))
 
-    
-
-    
     aft_market_open = asyncio.create_task(trade_cycle())
     while True:
         market_ws_data_updated.clear()
@@ -199,16 +196,17 @@ async def main_clock():
         close_time_obj = datetime.strptime(close_time, "%H:%M:%S").time()
 
         print(f"Current Time: {current_time_obj}")
+        print(f"Current price: {market_ws_data['current_price']}")
 
         if current_time_obj > close_time_obj:
             print("Breaking loop - market is closed")
             aft_market_open.cancel()
             break
 
-        print('FINAL ORDERBOOK:')
-        print(pd.read_json(market_ws_data['order_book']))
-        print('FINAL PARTICIPANTS:')
-        print(pd.read_json(market_ws_data['participants']))
+        # print('FINAL ORDERBOOK:')
+        # print(pd.read_json(market_ws_data['order_book']))
+        # print('FINAL PARTICIPANTS:')
+        # print(pd.read_json(market_ws_data['participants']))
 
 async def start():
 
@@ -244,8 +242,6 @@ if __name__ == '__main__':
     init_open_price = 100.0
 
     n_participants = 100
-
-    max_price_dev = 0.01 # *100 pct, max open price deviation from last price
 
     progress_step = 6.0 # amount of sec to progress in the simulated market
     sleep_step = 0.1 # amount of sec to wait in each progress tick
