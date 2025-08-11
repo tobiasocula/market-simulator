@@ -47,12 +47,6 @@ function Terminal({ logs }) {
   // Automatically scrolls to bottom on new logs
   const terminalRef = useRef(null);
 
-  // useEffect(() => {
-  //   if (terminalRef.current) {
-  //     terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-  //   }
-  // }, [logs]);
-
   return (
     <div
       ref={terminalRef}
@@ -78,7 +72,14 @@ function Terminal({ logs }) {
 
 function App() {
 
-  const inSim = useRef(false);
+  const [running, setRunning] = useState(false);
+  const runningRef = useRef(running);
+
+  // keep ref in sync with state
+  useEffect(() => {
+    runningRef.current = running;
+  }, [running]);
+
   const orderCounter = useRef(0);
   const [orderLogs, setOrderLogs] = useState([]);
   const [tradeLogs, setTradeLogs] = useState([]);
@@ -91,14 +92,10 @@ function App() {
   const [curTime, setCurTime] = useState(null);
   const [curPrice, setCurPrice] = useState(null);
 
-  useEffect(() => {
-    inSim.current = inSim;
-  }, [inSim]);
-
   const [marketSettings, setMarketSettings] = useState({
       open_time: "08:00:00",
       close_time: "12:00:00",
-      start_time: "07:50:00",
+      start_time: "07:30:00",
       progress_step: 6.0,
       sleep_step: 0.1,
       ws_delay_step: 0.1,
@@ -111,8 +108,8 @@ function App() {
     pctAgressiveOrders: 0.30, // pct of orders trading below (selling) or above (buying)
     // current best bid and ask
     pctLimitOrders: 0.30, // pct of limit orders (not aggressive)
-    avgTradesBeforeMarketOpen: 10.0, // per minute per participant
-    avgTradesAfterMarketOpen: 2.0, // per minute per participant
+    avgTradesBeforeMarketOpen: 20.0, // per minute per participant
+    avgTradesAfterMarketOpen: 20.0, // per minute per participant
     avgPriceDeviation: 0.01, // avg price deviation when trading aggresively
     stdPriceDeviation: 0.005, // std of price deviation when trading aggresively
     upperTradeVolume: 12,
@@ -130,9 +127,15 @@ function App() {
     currentPrice: null
   });
 
+function altOrderGenerator(pid) {
+  // new system for order generation (more realistic)
+  
+}
+
 function orderGenerator(participant_id) {
 
   const time = new Date(Date.now()).toISOString().slice(11, 19);
+  orderCounter.current++;
   console.log('now:', time);
   const aggressiveOrder = Math.random() <= tradeSettings.pctAgressiveOrders;
   const volume = Math.round((Math.random() * 
@@ -172,15 +175,9 @@ function orderGenerator(participant_id) {
     console.log('price4:', price);
     return {volume, buy, participant_id, price, time, id: orderCounter.current};
     } else {
-      if (buy) {
-        const price = streamedData.current.bestBid;
-        console.log('price1:', price);
-        return {volume, buy, participant_id, price, time, id: orderCounter.current};
-      } else {
-        const price = streamedData.current.bestAsk;
-        console.log('price2:', price);
-        return {volume, buy, participant_id, price, time, id: orderCounter.current};
-      }
+      const price = streamedData.current.currentPrice;
+      console.log('price2:', price);
+      return {volume, buy, participant_id, price, time, id: orderCounter.current};
     }
   }
 }
@@ -188,7 +185,7 @@ function orderGenerator(participant_id) {
 async function sendOrderBeforeMarketOpen(pid) {
   const orderParams = orderGenerator(pid);
   console.log('orderparams:', orderParams);
-  const resp = await fetch(`${BASEURL}/place_order_before_market_open`, {
+  const resp = await fetch(`${BASEURL}/place_order`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(orderParams)
@@ -226,15 +223,13 @@ function subscribeMarketData() {
       streamedData.current = {
         bidBook: message.bid_book,
         askBook: message.ask_book,
-        bestBid: message.best_bid,
-        bestAsk: message.best_ask,
         currentPrice: message.current_price,
         currentTime: message.current_time,
         participantData: message.participants,
         numOrdersInOB: message.num_orders_in_ob,
         ltp: message.ltp
       };
-      console.log('STREAMED DATA RESULT:', streamedData.current);
+      //console.log('STREAMED DATA RESULT:', streamedData.current);
     } catch (err) {
       console.error("Error parsing WebSocket message:", err);
     }
@@ -256,16 +251,19 @@ function subscribeMarketData() {
   return socket;
 }
 
+console.log('market params', marketSettings);
+
 async function sendOrderAfterMarketOpen(pid) {
   const orderParams = orderGenerator(pid);
   console.log('orderparams:', orderParams);
+  console.log('TRYING TO SEND ORDER AFTER MARKET OPEN');
   const resp = await fetch(`${BASEURL}/place_order`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(orderParams)
           });
   if (resp.status !== 200) {
-    throw new Error('failed to send order before market open:', resp.status);
+    throw new Error('failed to send order after market open:', resp.status);
   }
   addOrderLog(`sent ${orderParams.buy ? 'buy' : 'sell'} order from ${pid} with volume ${orderParams.volume} @${orderParams.price}
     at timestamp ${orderParams.time}`);
@@ -281,12 +279,13 @@ async function oneParticipantTradeCycleAfterMarketOpen(id) {
   const [hcl, mcl, scl] = marketSettings.close_time.split(":").map(Number);
   const closeTimeDate = new Date(1970, 0, 1, hcl, mcl, scl);
 
-  while (true) {
-    const [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
-    const currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
+  let [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
+  let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
+
+  while (runningRef.current && currentTimeDate < closeTimeDate) {
+    [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
+    currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
     //console.log('seen currenttime:', currentTimeDate);
-    if (currentTimeDate >= closeTimeDate) return;
-    if (!inSim.current) return;
     if (c % n === 0) {
       const chanceToTrade = tradeSettings.avgTradesAfterMarketOpen / 60;
       if (Math.random() <= chanceToTrade) sendOrderAfterMarketOpen(id);
@@ -298,27 +297,31 @@ async function oneParticipantTradeCycleAfterMarketOpen(id) {
 }
 
 async function oneParticipantTradeCycleBeforeMarketOpen(id) {
+  console.log('called onepart trade cycle');
   //console.log('streameddata:', streamedData);
   
   const n = Math.round(1 / marketSettings.sleep_step);
   let c = 0;
 
   while (typeof streamedData.current?.currentTime !== "string") {
+    console.log('waiting for curtime');
     await new Promise(res => setTimeout(res, 100));
   }
+  console.log('current time fetched!');
   //console.log("curTimeString BEFORE split:", streamedData.current.currentTime);
 
   // open time date
   const [ho, mo, so] = marketSettings.open_time.split(":").map(Number);
   const openTimeDate = new Date(1970, 0, 1, ho, mo, so);
 
-  while (true) {
+  let [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
+  let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
+  console.log('entering while loop..');
+  while (runningRef.current && currentTimeDate < openTimeDate) {
     
-    const [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
-    const currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
-    //console.log('seen currenttime:', currentTimeDate);
-    if (currentTimeDate >= openTimeDate) return;
-    if (!inSim.current) return;
+    [hc, mc, sc] = streamedData.current.currentTime.split(":").map(Number);
+    currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
+    console.log('seen currenttime:', currentTimeDate);
 
     if (c % n === 0) {
       const chanceToTrade = tradeSettings.avgTradesBeforeMarketOpen / 60;
@@ -334,7 +337,7 @@ async function oneParticipantTradeCycleBeforeMarketOpen(id) {
 async function startSimulation() {
 
   addGeneralLog('started simulation');
-  inSim.current = true;
+  setRunning(true);
 
   const pIDs = [...Array(marketSettings.n_participants).keys()]
   console.log('pids:', pIDs);
@@ -360,6 +363,7 @@ async function startSimulation() {
   if (waitWSResponse.status !== 200) {
     throw new Error('failed to wait for ws:', waitWSResponse.status);
   }
+  console.log('connected ws!!!');
 
   // start trading cycle for participants
   //await new Promise(resolve => setTimeout(resolve, 5000));
@@ -382,6 +386,10 @@ async function startSimulation() {
   
   // start trading cycle now that market has opened
   const marketOpenTasks = pIDs.map(pid => oneParticipantTradeCycleAfterMarketOpen(pid));
+  await Promise.all(marketOpenTasks);
+  // market has closed
+  return;
+
 
 }
 
@@ -405,7 +413,7 @@ async function startSimulation() {
           <button
             className="start-simulation"
             onClick={startSimulation}
-            disabled={inSim.current}
+            disabled={running}
             style={{
               backgroundColor: 'green',
               border: 'none',
@@ -420,10 +428,10 @@ async function startSimulation() {
           <button
             className="end-simulation"
             onClick={() => {
-              inSim.current = false;
+              //setRunning(false);
               window.location.reload();
             }}
-            disabled={!inSim.current}
+            disabled={!running}
             style={{
               backgroundColor: 'red',
               border: 'none',
@@ -472,7 +480,7 @@ async function startSimulation() {
       </div>
 
       <div className='sub-layer'>
-        <div className='current-time-sec'>{inSim.current ? (
+        <div className='current-time-sec'>{running ? (
           <div className='current-time' style={{
           fontSize: '1.1rem',
           fontWeight: 'bold',
@@ -484,7 +492,7 @@ async function startSimulation() {
       }
       </div>
       <div className='current-price-sec'>
-        {inSim.current ? (
+        {running ? (
           <div className='current-price' style={{
           fontSize: '1.1rem',
           fontWeight: 'bold',

@@ -1,8 +1,8 @@
 
 from fastapi import FastAPI, WebSocket, HTTPException
 import pandas as pd
+import logging
 from contextlib import asynccontextmanager
-from multiprocessing import Pool
 import os
 import asyncio
 import traceback
@@ -13,6 +13,31 @@ import numpy as np
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# Create file handler
+file_handler = logging.FileHandler("app.log", mode='a')
+file_handler.setLevel(logging.INFO)
+
+# Create a common formatter and set it for both handlers
+formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+# Disable propagation to avoid duplicate logs
+logger.propagate = False
 
 class rpInput(BaseModel):
     amount: Optional[int] = None
@@ -47,7 +72,7 @@ baseurl = "http://localhost:8000"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    app.state.open_price_lock = asyncio.Lock()
+    app.state.ltp_lock = asyncio.Lock()
     app.state.bid_book_lock = asyncio.Lock()
     app.state.ask_book_lock = asyncio.Lock()
     app.state.time_lock = asyncio.Lock()
@@ -101,7 +126,7 @@ async def init_market(market_init: MarketInitializer):
     try:
         async with app.state.time_lock:
             app.state.current_time = market_init.start_time
-        async with app.state.open_price_lock:
+        async with app.state.ltp_lock:
             app.state.ltp = market_init.init_open_price
 
         app.state.open_time = market_init.open_time
@@ -147,9 +172,8 @@ async def random_participants(inp: rpInput):
     return {"res": [int(x) for x in app.state.participants.iloc[arr]['id'].values]}
 
 
-@app.post("/place_order_before_market_open")
-async def place_order_before_market_open(order: OrderRequest):
-    print('CALLED!!!')
+@app.post("/place_order")
+async def place_order(order: OrderRequest):
 
     price = order.price if order.price is not None else app.state.ltp
 
@@ -173,7 +197,9 @@ async def place_order_before_market_open(order: OrderRequest):
                     "time": [order.time],
                     "pid": [order.participant_id],
                     "id": [order.id]
-                })]).sort_values(['price', 'time'], ascending=[False, False])
+                })]).sort_values(
+                    ['price', 'time'], ascending=[False, False]
+                    ).reset_index(drop=True)
 
     else:
 
@@ -195,7 +221,9 @@ async def place_order_before_market_open(order: OrderRequest):
                     "time": [order.time],
                     "pid": [order.participant_id],
                     "id": [order.id]
-                })]).sort_values(['price', 'time'], ascending=[True, True])
+                })]).sort_values(
+                    ['price', 'time'], ascending=[True, True]
+                    ).reset_index(drop=True)
 
 
 @app.websocket("/ws/marketdata")
@@ -223,23 +251,20 @@ async def marketdata(websocket: WebSocket):
         print(f"Unexpected error in websocket handler: {e}")
         await websocket.close()
 
+# helper function
 def allmaxima(arr):
-    mi = np.argmax(arr)
-    m = max(arr)
-    res = [mi]
+    m = arr[0]
+    res = []
+    resi = []
     for i,a in enumerate(arr):
-        if i!=mi and a == m:
-            res.append(i)
-    return res
-
-def allminima(arr):
-    mi = np.argmin(arr)
-    m = min(arr)
-    res = [mi]
-    for i,a in enumerate(arr):
-        if i!=mi and a == m:
-            res.append(i)
-    return res
+        if a==m:
+            res.append(m)
+            resi.append(i)
+        elif a>m:
+            res = [a]
+            resi = [i]
+            m = a
+    return res, resi
         
 
 
@@ -248,7 +273,7 @@ async def at_market_open():
 
     if app.state.bid_book.empty or app.state.ask_book.empty:
         # remain old price
-        return
+        return {"msg": ""}
 
     # first determine open price
 
@@ -257,7 +282,7 @@ async def at_market_open():
         Non-overlapping market -> tie breaker
         Choose best bid or ask (closest to previous open)
         """
-        async with app.state.open_price_lock:
+        async with app.state.ltp_lock:
             app.state.ltp = (
                 app.state.bid_book.iloc[0]['price']
                 if
@@ -267,6 +292,11 @@ async def at_market_open():
                 else
                 app.state.ask_book.iloc[0]['price']
             )
+        logger.info('ATMO99')
+        logger.info('BID BOOK')
+        logger.info(app.state.bid_book)
+        logger.info("ASK BOOK")
+        logger.info(app.state.ask_book)
         return {"msg": ""}
     """
     else: overlapping market
@@ -285,8 +315,10 @@ async def at_market_open():
     alls['cumask'] = alls['askvol'].cumsum()
     alls['cumbid'] = alls['bidvol'].iloc[::-1].cumsum().iloc[::-1]
     alls['matchvol'] = alls[['cumask', 'cumbid']].values.min(axis=1)
+
+    logger.info('ALLS DF:'); logger.info(alls)
     
-    maxints = allmaxima(alls['matchvol'].values)
+    _, maxints = allmaxima(alls['matchvol'].values)
     if len(maxints) > 1:
         alls['imbalance'] = abs(alls['cumbid'] - alls['cumask'])
         idx = np.argmin(alls.iloc[maxints]['imbalance'].values)
@@ -295,245 +327,108 @@ async def at_market_open():
     else:
         price = alls.iloc[m]['price']
     
-    async with app.state.open_price_lock:
+    async with app.state.ltp_lock:
+        logger.info('ATMO: SETTING PRICE AT', price)
         app.state.ltp = price
 
-    # execute potential trades
-    async with app.state.bid_book_lock, app.state.ask_book_lock:
+    # execute trades
+    while not await check_trades():
+        logger.info('ATMO: checking a trade')
+        continue
 
-        while True:
-            if app.state.bid_book.empty or app.state.ask_book.empty:
-                return {"msg": ""}
-            if app.state.bid_book.iloc[0]['price'] < app.state.ask_book.iloc[0]['price']:
-                return {"msg": ""}
-            if app.state.bid_book.iloc[0]['volume'] < app.state.ask_book.iloc[0]['volume']:
-                app.state.ask_book.at[0, 'volume'] -= app.state.bid_book.iloc[0]['volume']
+    logger.info('ATMO: closed check trades loop')
+    asyncio.create_task(trade_cycle())
+    return {"msg": ""}
 
-                # update participants book
-                async with app.state.participants_lock:
-                    pid_bid = app.state.participants.index[
-                        app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
-                        ]
-                    pid_ask = app.state.participants.index[
-                        app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                        ]
-                    volume = app.state.bid_book.iloc[0]['volume']
-                    app.state.participants.loc[pid_bid, "balance"] -= volume * app.state.ltp
-                    app.state.participants.loc[pid_bid, "asset_balance"] += volume
-                    app.state.participants.loc[pid_ask, "balance"] += volume * app.state.ltp
-                    app.state.participants.loc[pid_ask, "asset_balance"] -= volume
+async def trade_cycle():
+    logger.info('ENTERED TRADE CYCLE')
+    while True:
+        asyncio.create_task(check_trades())
+        await asyncio.sleep(app.state.sleep_step)
 
-                ask_id = app.state.ask_book.iloc[0]['id']
-                bid_id = app.state.bid_book.iloc[0]['id']
-
-                app.state.bid_book = app.state.bid_book.iloc[1:].reset_index(drop=True)
-
-                return {"msg": f"""
-                        Executed orders {bid_id} and
-                        {ask_id} @ {app.state.ltp} and volume {volume} at time {app.state.current_time}
-                """}
-
-            elif app.state.bid_book.iloc[0]['volume'] > app.state.ask_book.iloc[0]['volume']:
-                app.state.bid_book.at[0, 'volume'] -= app.state.ask_book.iloc[0]['volume']
-
-                # update participants book
-                async with app.state.participants_lock:
-                    pid_bid = app.state.participants.index[
-                        app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
-                        ]
-                    pid_ask = app.state.participants.index[
-                        app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                        ]
-                    volume = app.state.ask_book.iloc[0]['volume']
-                    app.state.participants.loc[pid_bid, "balance"] -= volume * app.state.ltp
-                    app.state.participants.loc[pid_bid, "asset_balance"] += volume
-                    app.state.participants.loc[pid_ask, "balance"] += volume * app.state.ltp
-                    app.state.participants.loc[pid_ask, "asset_balance"] -= volume
-
-                ask_id = app.state.ask_book.iloc[0]['id']
-                bid_id = app.state.bid_book.iloc[0]['id']
-
-                app.state.ask_book = app.state.ask_book.iloc[1:].reset_index(drop=True)
-
-                return {"msg": f"""
-                        Executed orders {bid_id} and
-                        {ask_id} @ {app.state.ltp} and volume {volume} at time {app.state.current_time}
-                """}
-
-            else:
-                # equal volumes
-                volume = app.state.ask_book.iloc[0]['volume']
-                ask_id = app.state.ask_book.iloc[0]['id']
-                bid_id = app.state.bid_book.iloc[0]['id']
-                app.state.bid_book = app.state.bid_book.iloc[1:].reset_index(drop=True)
-                app.state.ask_book = app.state.ask_book.iloc[1:].reset_index(drop=True)
-
-                return {"msg": f"""
-                        Executed orders {bid_id} and
-                        {ask_id} @ {app.state.ltp} and volume {volume} at time {app.state.current_time}
-                """}
-
-@app.post("/place_order")
-async def place_order(order: OrderRequest):
-
-    if order.buy:
+async def check_trades():
+    """
+    clock for checking if trades are possible, and executing
+    also update last trade price
+    """
+    if app.state.bid_book.empty or app.state.ask_book.empty:
+        # no trade possible
+        return True
+    if app.state.bid_book.iloc[0]['price'] < app.state.ask_book.iloc[0]['price']:
+        # no trade possible
+        return True
+    # else: trade possible
+    if app.state.bid_book.iloc[0]['volume'] < app.state.ask_book.iloc[0]['volume']:
+        # more ask than bid volume
         async with app.state.ask_book_lock:
-            while True:
-                if order.volume == 0:
-                    return {"msg": ""}
-                if app.state.ask_book.empty:
-                    # append buy order to bid book
-                    async with app.state.bid_book_lock:
-                        app.state.bid_book = pd.concat([app.state.bid_book, pd.DataFrame({
-                            "price": [order.price],
-                            "volume": [order.volume],
-                            "time": [order.time],
-                            "pid": [order.participant_id],
-                            "id": [order.id]
-                        })]).sort_values(['price', 'time'], ascending=[False, False])
-                    return {"msg": ""}
-                if order.price < app.state.ask_book.iloc[0]['price']:
-                    # no matching trade possible
-                    # append buy order to bid book
-                    async with app.state.bid_book_lock:
-                        app.state.bid_book = pd.concat([app.state.bid_book, pd.DataFrame({
-                            "price": [order.price],
-                            "volume": [order.volume],
-                            "time": [order.time],
-                            "pid": [order.participant_id],
-                            "id": [order.id]
-                        })]).sort_values(['price', 'time'], ascending=[False, False])
-                    return {"msg": ""}
-                if order.volume > app.state.ask_book.iloc[0]['volume']:
+            # recude ask book volume
+            app.state.ask_book.loc[app.state.ask_book.index[0], 'volume'] -= app.state.bid_book.iloc[0]['volume']
 
-                    order.volume -= app.state.ask_book.iloc[0]['volume']
+        if app.state.ask_book.iloc[0]['time'] <  app.state.bid_book.iloc[0]['time']:
+            # execute at ask price
+            price = app.state.ask_book.iloc[0]['price']
+        else:
+            # execute at bid price
+            price = app.state.bid_book.iloc[0]['price']
 
-                    # update participants book
-                    async with app.state.participants_lock:
-                        pid_ask = app.state.participants.index[
-                            app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                            ]
-                        pid_bid = app.state.participants.index[
-                            app.state.participants['id'] == order.participant_id
-                            ]
-                        
-                        price = app.state.ask_book.iloc[0]['price']
-                        volume = app.state.ask_book.iloc[0]['volume']
+        # update balances
+        async with app.state.participants_lock:
+            pid_bid = app.state.participants.index[
+                app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
+                ]
+            pid_ask = app.state.participants.index[
+                app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
+                ]
+            volume = app.state.bid_book.iloc[0]['volume']
 
-                        app.state.participants.loc[pid_bid, "balance"] -= volume * price
-                        app.state.participants.loc[pid_bid, "asset_balance"] += volume
-                        app.state.participants.loc[pid_ask, "balance"] += volume * price
-                        app.state.participants.loc[pid_ask, "asset_balance"] -= volume
+            app.state.participants.loc[pid_bid, "balance"] -= volume * price
+            app.state.participants.loc[pid_bid, "asset_balance"] += volume
+            app.state.participants.loc[pid_ask, "balance"] += volume * price
+            app.state.participants.loc[pid_ask, "asset_balance"] -= volume
 
-                    app.state.ask_book = app.state.ask_book.iloc[1:].reset_index(drop=True)
+        # remove bid order
+        app.state.bid_book = app.state.bid_book.iloc[1:].reset_index(drop=True)
 
-                    return {"msg": f"""
-                            Executed orders {app.state.ask_book.iloc[0]['id']} and
-                            {order.id} @ {price} and volume {volume} at time {app.state.current_time}
-                    """}
+        # update ltp
+        async with app.state.ltp_lock:
+            app.state.ltp = price
 
-                else:
-                    app.state.ask_book.at[0, 'volume'] -= order.volume
+        return False
+    
+    # else: more bid than ask
+    async with app.state.bid_book_lock:
+        # recude ask book volume
+        app.state.bid_book.loc[app.state.bid_book.index[0], 'volume'] -= app.state.ask_book.iloc[0]['volume']
 
-                    # update participants book
-                    async with app.state.participants_lock:
-                        pid_ask = app.state.participants.index[
-                            app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                            ]
-                        pid_bid = app.state.participants.index[
-                                app.state.participants['id'] == order.participant_id
-                                ]
-                        
-                        price = app.state.ask_book.iloc[0]['price']
-                        app.state.participants.loc[pid_bid, "balance"] -= order.volume * price
-                        app.state.participants.loc[pid_bid, "asset_balance"] += order.volume
-                        app.state.participants.loc[pid_ask, "balance"] += order.volume * price
-                        app.state.participants.loc[pid_ask, "asset_balance"] -= order.volume
+    if app.state.ask_book.iloc[0]['time'] <  app.state.bid_book.iloc[0]['time']:
+        # execute at ask price
+        price = app.state.ask_book.iloc[0]['price']
+    else:
+        # execute at bid price
+        price = app.state.bid_book.iloc[0]['price']
 
-                    return {"msg": f"""
-                            Executed orders {app.state.ask_book.iloc[0]['id']} and
-                            {order.id} @ {price} and volume {order.volume} at time {app.state.current_time}
-                    """}
+    # update balances
+    async with app.state.participants_lock:
+        pid_bid = app.state.participants.index[
+            app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
+            ]
+        pid_ask = app.state.participants.index[
+            app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
+            ]
+        volume = app.state.ask_book.iloc[0]['volume']
 
+        app.state.participants.loc[pid_bid, "balance"] -= volume * price
+        app.state.participants.loc[pid_bid, "asset_balance"] += volume
+        app.state.participants.loc[pid_ask, "balance"] += volume * price
+        app.state.participants.loc[pid_ask, "asset_balance"] -= volume
 
-    else: # sell order
+    # remove ask order
+    app.state.ask_book = app.state.ask_book.iloc[1:].reset_index(drop=True)
 
-        async with app.state.bid_book_lock:
-            while True:
-                if order.volume == 0:
-                    return {"msg": ""}
-                if app.state.bid_book.empty:
-                    # append buy order to bid book
-                    async with app.state.ask_book_lock:
-                        app.state.ask_book = pd.concat([app.state.ask_book, pd.DataFrame({
-                            "price": [order.price],
-                            "volume": [order.volume],
-                            "time": [order.time],
-                            "pid": [order.participant_id],
-                            "id": [order.id]
-                        })]).sort_values(['price', 'time'], ascending=[True, True])
-                    return {"msg": ""}
-                if order.price < app.state.bid_book.iloc[0]['price']:
-                    # no matching trade possible
-                    # append buy order to bid book
-                    async with app.state.ask_book_lock:
-                        app.state.ask_book = pd.concat([app.state.ask_book, pd.DataFrame({
-                            "price": [order.price],
-                            "volume": [order.volume],
-                            "time": [order.time],
-                            "pid": [order.participant_id],
-                            "id": [order.id]
-                        })]).sort_values(['price', 'time'], ascending=[True, True])
-                    return {"msg": ""}
-                
-                if order.volume > app.state.bid_book.iloc[0]['volume']:
+    # update ltp
+    async with app.state.ltp_lock:
+        app.state.ltp = price
 
-                    order.volume -= app.state.bid_book.iloc[0]['volume']
+    return False
 
-                    # update participants book
-                    async with app.state.participants_lock:
-                        pid_ask = app.state.participants.index[
-                            app.state.participants['id'] == order.participant_id
-                            ]
-                        pid_bid = app.state.participants.index[
-                            app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                            ]
-                        
-                        volume = app.state.bid_book.iloc[0]['volume']
-                        price = app.state.bid_book.iloc[0]['price']
-
-                        app.state.participants.loc[pid_bid, "balance"] -= volume * price
-                        app.state.participants.loc[pid_bid, "asset_balance"] += volume
-                        app.state.participants.loc[pid_ask, "balance"] += volume * price
-                        app.state.participants.loc[pid_ask, "asset_balance"] -= volume
-
-                    app.state.bid_book = app.state.bid_book.iloc[1:].reset_index(drop=True)
-
-                    return {"msg": f"""
-                            Executed orders {app.state.ask_book.iloc[0]['id']} and
-                            {order.id} @ {price} and volume {volume} at time {app.state.current_time}
-                    """}
-
-                else:
-                    app.state.bid_book.at[0, 'volume'] -= order.volume
-
-                    # update participants book
-                    async with app.state.participants_lock:
-                        pid_ask = app.state.participants.index[
-                            app.state.participants['id'] == order.participant_id
-                            ]
-                        pid_bid = app.state.participants.index[
-                                app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                                ]
-                        price = app.state.bid_book.iloc[0]['price']
-                        app.state.participants.loc[pid_bid, "balance"] -= order.volume * price
-                        app.state.participants.loc[pid_bid, "asset_balance"] += order.volume
-                        app.state.participants.loc[pid_ask, "balance"] += order.volume * price
-                        app.state.participants.loc[pid_ask, "asset_balance"] -= order.volume
-
-                    return {"msg": f"""
-                            Executed orders {app.state.ask_book.iloc[0]['id']} and
-                            {order.id} @ {price} and volume {order.volume} at time {app.state.current_time}
-                    """}
-
-
+    
