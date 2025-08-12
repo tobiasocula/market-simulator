@@ -58,7 +58,7 @@ class MarketInitializer(BaseModel):
     price_rounding_digits: int
 
 class OrderRequest(BaseModel):
-    volume: int
+    volume: int | float
     buy: bool
     participant_id: int
     price: Optional[float | int | None] = None
@@ -328,7 +328,7 @@ async def at_market_open():
         price = alls.iloc[m]['price']
     
     async with app.state.ltp_lock:
-        logger.info('ATMO: SETTING PRICE AT', price)
+        #logger.info('ATMO: SETTING PRICE AT', price)
         app.state.ltp = price
 
     # execute trades
@@ -373,11 +373,13 @@ async def check_trades():
             async with app.state.participants_lock:
                 pid_bid = app.state.participants.index[
                     app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
-                    ]
+                    ][0]
                 pid_ask = app.state.participants.index[
                     app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                    ]
+                    ][0]
                 volume = app.state.bid_book.iloc[0]['volume']
+
+                #logger.info('BID VOLUME:', volume)
 
                 app.state.participants.loc[pid_bid, "balance"] -= volume * price
                 app.state.participants.loc[pid_bid, "asset_balance"] += volume
@@ -408,11 +410,12 @@ async def check_trades():
             async with app.state.participants_lock:
                 pid_bid = app.state.participants.index[
                     app.state.participants['id'] == app.state.bid_book.iloc[0]['pid']
-                    ]
+                    ][0]
                 pid_ask = app.state.participants.index[
                     app.state.participants['id'] == app.state.ask_book.iloc[0]['pid']
-                    ]
+                    ][0]
                 volume = app.state.ask_book.iloc[0]['volume']
+                #logger.info('ASK VOLUME:', volume)
 
                 app.state.participants.loc[pid_bid, "balance"] -= volume * price
                 app.state.participants.loc[pid_bid, "asset_balance"] += volume

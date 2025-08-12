@@ -44,12 +44,9 @@ function OrderBookTable({ orders }) {
 }
 
 function Terminal({ logs }) {
-  // Automatically scrolls to bottom on new logs
-  //const terminalRef = useRef(null);
 
   return (
     <div
-      //ref={terminalRef}
       style={{
         background: '#111',
         color: '#0f0',
@@ -422,7 +419,7 @@ async function startSimulation() {
   addGeneralLog('started simulation');
   setRunning(true);
 
-  const pIDs = [...Array(marketSettings.n_participants).keys()]
+  const pIDs = [...Array(marketSettings.n_participants).keys()];
   console.log('pids:', pIDs);
 
 

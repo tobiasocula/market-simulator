@@ -4,6 +4,7 @@ import numpy as np
 
 def main():
 
+    """Set parameters"""
     n_market_participants = 100
 
     min_number_of_trades = 10

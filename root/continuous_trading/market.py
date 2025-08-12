@@ -519,10 +519,12 @@ async def place_order_bef_mo(order: OrderRequest):
 
 @app.post("/modify_order")
 async def modify_order(orderid: int):
+    # not implemented yet
     pass
 
 @app.post("/cancel_order")
 async def modify_order(orderid: int):
+    # not implemented yet
     pass
 
 @app.get("/wait_for_ws_connection")

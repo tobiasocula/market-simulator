@@ -170,23 +170,19 @@ async def main_clock():
         current_time_obj = datetime.strptime(market_ws_data["current_time"], "%H:%M:%S").time()
         open_time_obj = datetime.strptime(open_time, "%H:%M:%S").time()
 
-        print(f"Current Time: {current_time_obj}")
-        #print('order book:'); print(market_ws_data['order_book'])
+        print('current time:', current_time_obj)
 
         if current_time_obj > open_time_obj:
-            print("Breaking loop - market is open now!")
+            print("breaking loop, market open")
             bef_market_open.cancel()
             break
 
     # determine open price
-    #print("Calling at_open()...")
     await at_open()
-    #print("Returned from at_open()")
     market_ws_data_updated.clear()
     await market_ws_data_updated.wait()
-    #print('order book at market open:'); print(pd.read_json(market_ws_data['order_book']))
-    #print('participants'); print(pd.read_json(market_ws_data['participants']))
 
+    # trade cycle during market open
     aft_market_open = asyncio.create_task(trade_cycle())
     while True:
         market_ws_data_updated.clear()
@@ -195,18 +191,15 @@ async def main_clock():
         current_time_obj = datetime.strptime(market_ws_data["current_time"], "%H:%M:%S").time()
         close_time_obj = datetime.strptime(close_time, "%H:%M:%S").time()
 
-        print(f"Current Time: {current_time_obj}")
-        print(f"Current price: {market_ws_data['current_price']}")
+        print('current time:', current_time_obj)
+        print('current price:', market_ws_data['current_price'])
 
         if current_time_obj > close_time_obj:
-            print("Breaking loop - market is closed")
+            print("breaking loop, market closed")
             aft_market_open.cancel()
             break
 
-        # print('FINAL ORDERBOOK:')
-        # print(pd.read_json(market_ws_data['order_book']))
-        # print('FINAL PARTICIPANTS:')
-        # print(pd.read_json(market_ws_data['participants']))
+        # done
 
 async def start():
 

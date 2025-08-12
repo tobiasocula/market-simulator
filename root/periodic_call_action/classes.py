@@ -97,6 +97,7 @@ class PCAmarket:
     def determine_open_price(self):
         """
         -Collect all orders of the market session, ascending / descending dep. on buy/sell
+        -Calculate cumulative bid and ask volume
         -Find matching volume
         -Determine open price
         """
@@ -144,7 +145,6 @@ class PCAmarket:
     def execute_trades(self):
         """Executing trades and clearing order book"""
         assert self.state == 2, AssertionError("incorrect time to start trading")
-        print(self.order_book)
         for idx, row in self.exec_table.iterrows():
             while (
                 sum(self.exec_table.loc[idx, 'AskVolumes']) > 0 and
