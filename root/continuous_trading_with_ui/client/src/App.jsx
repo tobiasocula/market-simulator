@@ -116,15 +116,20 @@ function App() {
     stdPriceDeviation: 0.005, // std of price deviation when trading aggresively
     upperTradeVolume: 12,
     lowerTradeVolume: 6,
-    pctBuyOrders: 0.5
+    pctBuyOrders: 0.5,
+    orderCheckingPeriod: 0.2 // seconds of order checking cycle
   });
   const [tradeSettings2, setTradeSettings2] = useState({
-    k: 2.0,
+    k: 2.0, // imbalance constant
     avgPriceDeviation: 0.01,
     stdPriceDeviation: 0.005,
     pctMarketOrders: 0.2,
     lowerTradeVolume: 5,
-    upperTradeVolume: 15
+    upperTradeVolume: 15,
+    avgTradesAfterMarketOpen: 50.0,
+    avgTradesBeforeMarketOpen: 50.0,
+    pctAgressiveOrders: 0.2,
+    orderCheckingPeriod: 0.2 // seconds of order checking cycle
   })
 
   const streamedData = useRef({
@@ -206,44 +211,42 @@ function orderGenerator1(participant_id) {
 // price determination: biased towards underrepresented area
 // (more buys if buy volume is low and vice versa)
 
-function orderGenerator2(pid) {
+function orderGenerator2(participant_id, bidsLen, asksLen) {
   const time = streamedData.current.currentTime;
   orderCounter.current++;
   // determine buying probability, based on imbalance between bids and asks
   // if order book is empty on either side -> imbalance = 0
-  console.log('BIDBOOK PRINTOUT:', streamedData.bidBook);
-  let imbalance;
-  if (typeof streamedData.bidBook === "undefined"
-    || typeof streamedData.askBook === "undefined"
-    || streamedData.bidBook.length === 0
-    || streamedData.askBook.length === 0
-  ) {
-    imbalance = 0;
-  } else {
-    const nBids = streamedData.bidBook.length;
-    const nAsks = streamedData.askBook.price.length;
-    imbalance = (nBids - nAsks) / (nBids + nAsks + 1);
-  }
+  const imbalance = (bidsLen - asksLen) / (bidsLen + asksLen + 1);
   
   // imbalance > 0 means more bids than asks -> bias towards buying more
   // buying probability
-  const buy = Math.random() <= 0.5 + imbalance * tradeSettings2.k
+  const buy = Math.random() <= 0.5 - imbalance * tradeSettings2.k
   const volume = Math.round((Math.random() * 
   (tradeSettings2.upperTradeVolume - tradeSettings2.lowerTradeVolume)
   ) + tradeSettings2.lowerTradeVolume);
   const marketOrder = Math.random() <= tradeSettings2.pctMarketOrders;
+  const agressiveOrder = Math.random() <= tradeSettings2.pctAgressiveOrders;
   if (marketOrder) {
     // buy current price
-    console.log('RETURNING:', {volume, buy, pid, price: streamedData.current.currentPrice, time, id: orderCounter.current});
-    return {volume, buy, pid, price: streamedData.current.currentPrice, time, id: orderCounter.current};
-  } else {
+    return {volume, buy, participant_id, price: streamedData.current.currentPrice, time, id: orderCounter.current};
+  } else if (agressiveOrder) {
     // if buying: price = currentPrice + something
     // if selling: price = currentPrice - something
     const price =
-    randomNormal(streamedData.current.currentPrice * (1 + (buy ? 1 : -1) * tradeSettings2.avgPriceDeviation),
-    tradeSettings2.stdPriceDeviation * streamedData.current.currentPrice);
-    console.log('RETURNING:', {volume, buy, pid, price, time, id: orderCounter.current});
-    return {volume, buy, pid, price, time, id: orderCounter.current};
+    randomNormal(
+    streamedData.current.currentPrice * (1 + (buy ? 1 : -1) * tradeSettings2.avgPriceDeviation),
+    tradeSettings2.stdPriceDeviation * streamedData.current.currentPrice
+  );
+    return {volume, buy, participant_id, price, time, id: orderCounter.current};
+  } else {
+    // if buying: price = currentPrice - something
+    // if selling: price = currentPrice + something
+    const price =
+    randomNormal(
+    streamedData.current.currentPrice * (1 + (buy ? -1 : 1) * tradeSettings2.avgPriceDeviation),
+    tradeSettings2.stdPriceDeviation * streamedData.current.currentPrice
+  );
+    return {volume, buy, participant_id, price, time, id: orderCounter.current};
   }
 
 }
@@ -251,7 +254,10 @@ function orderGenerator2(pid) {
 
 
 async function sendOrderBeforeMarketOpen(pid) {
-  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid);
+  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid,
+    streamedData.current.bidBook ? streamedData.current.bidBook.length : 0,
+    streamedData.current.askBook ? streamedData.current.askBook.length : 0
+  );
   console.log('orderparams:', orderParams);
   const resp = await fetch(`${BASEURL}/place_order`, {
             method: 'POST',
@@ -322,7 +328,10 @@ function subscribeMarketData() {
 console.log('market params', marketSettings);
 
 async function sendOrderAfterMarketOpen(pid) {
-  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid);
+  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid,
+    streamedData.current.bidBook ? streamedData.current.bidBook.length : 0,
+    streamedData.current.askBook ? streamedData.current.askBook.length : 0
+  );
   console.log('orderparams:', orderParams);
   console.log('TRYING TO SEND ORDER AFTER MARKET OPEN');
   const resp = await fetch(`${BASEURL}/place_order`, {
@@ -340,7 +349,9 @@ async function sendOrderAfterMarketOpen(pid) {
 }
 
 async function oneParticipantTradeCycleAfterMarketOpen(id) {
-  const n = Math.round(1 / marketSettings.sleep_step);
+  const n = tradeFunction === 0 ?
+  Math.round(tradeSettings1.orderCheckingPeriod / marketSettings.sleep_step)
+  : Math.round(tradeSettings2.orderCheckingPeriod / marketSettings.sleep_step);
   let c = 0;
 
   // close time date
@@ -355,7 +366,9 @@ async function oneParticipantTradeCycleAfterMarketOpen(id) {
     currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
     //console.log('seen currenttime:', currentTimeDate);
     if (c % n === 0) {
-      const chanceToTrade = tradeSettings1.avgTradesAfterMarketOpen / 60;
+      const chanceToTrade = tradeFunction === 0 ?
+      tradeSettings1.avgTradesAfterMarketOpen / 60
+      : tradeSettings2.avgTradesAfterMarketOpen / 60;
       if (Math.random() <= chanceToTrade) sendOrderAfterMarketOpen(id);
     }
     c++;
@@ -392,7 +405,9 @@ async function oneParticipantTradeCycleBeforeMarketOpen(id) {
     console.log('seen currenttime:', currentTimeDate);
 
     if (c % n === 0) {
-      const chanceToTrade = tradeSettings1.avgTradesBeforeMarketOpen / 60;
+      const chanceToTrade = tradeFunction === 0 ?
+      tradeSettings1.avgTradesBeforeMarketOpen / 60
+      : tradeSettings2.avgTradesBeforeMarketOpen / 60;
       if (Math.random() <= chanceToTrade) sendOrderBeforeMarketOpen(id);
     }
     c++;
