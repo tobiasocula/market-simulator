@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 
 const BASEURL = "http://localhost:8000";
 
-// Standard normal using Box-Muller
+// normal distribution simulator using Box-Muller transformation
 function randomNormal(mean, stdDev) {
   const u1 = Math.random();
   const u2 = Math.random();
@@ -45,11 +45,11 @@ function OrderBookTable({ orders }) {
 
 function Terminal({ logs }) {
   // Automatically scrolls to bottom on new logs
-  const terminalRef = useRef(null);
+  //const terminalRef = useRef(null);
 
   return (
     <div
-      ref={terminalRef}
+      //ref={terminalRef}
       style={{
         background: '#111',
         color: '#0f0',
@@ -75,6 +75,8 @@ function App() {
   const [running, setRunning] = useState(false);
   const runningRef = useRef(running);
 
+  const [tradeFunction, setTradeFunction] = useState(0);
+
   // keep ref in sync with state
   useEffect(() => {
     runningRef.current = running;
@@ -92,7 +94,7 @@ function App() {
   const [curTime, setCurTime] = useState(null);
   const [curPrice, setCurPrice] = useState(null);
 
-  const [marketSettings, setMarketSettings] = useState({
+  const [marketSettings, setmarketSettings] = useState({
       open_time: "08:00:00",
       close_time: "12:00:00",
       start_time: "07:30:00",
@@ -104,7 +106,7 @@ function App() {
       price_rounding_digits: 1,
       n_participants: 10
   });
-  const [tradeSettings, setTradeSettings] = useState({
+  const [tradeSettings1, setTradeSettings1] = useState({
     pctAgressiveOrders: 0.30, // pct of orders trading below (selling) or above (buying)
     // current best bid and ask
     pctLimitOrders: 0.30, // pct of limit orders (not aggressive)
@@ -116,6 +118,15 @@ function App() {
     lowerTradeVolume: 6,
     pctBuyOrders: 0.5
   });
+  const [tradeSettings2, setTradeSettings2] = useState({
+    k: 2.0,
+    avgPriceDeviation: 0.01,
+    stdPriceDeviation: 0.005,
+    pctMarketOrders: 0.2,
+    lowerTradeVolume: 5,
+    upperTradeVolume: 15
+  })
+
   const streamedData = useRef({
     bidBook: null,
     askBook: null,
@@ -127,63 +138,120 @@ function App() {
     currentPrice: null
   });
 
-function altOrderGenerator(pid) {
-  // new system for order generation (more realistic)
-  
-}
+// first of two order generator simulator functions
+// this one is quite basic and not very realistic
+// if trade volume is set too low, either bid or ask book could end up (almost) empty
 
-function orderGenerator(participant_id) {
+// volume policy: uniformly distribution between upper and lower limits
+// price policy: uses 'agressive' orders to overlap bid/ask
+// non-agressive orders can just buy market or limit (normal distribution
+// sample above/below target, depending on buy/sell)
 
-  const time = new Date(Date.now()).toISOString().slice(11, 19);
+function orderGenerator1(participant_id) {
+
+  //const time = new Date(Date.now()).toISOString().slice(11, 19);
+  const time = streamedData.current.currentTime;
   orderCounter.current++;
-  console.log('now:', time);
-  const aggressiveOrder = Math.random() <= tradeSettings.pctAgressiveOrders;
+  // determine probaility of executing agressive order
+  const agressiveOrder = Math.random() <= tradeSettings1.pctAgressiveOrders;
+  // volume is uniformly distributed
   const volume = Math.round((Math.random() * 
-  (tradeSettings.upperTradeVolume - tradeSettings.lowerTradeVolume)
-) + tradeSettings.lowerTradeVolume);
-  const buy = Math.random() <= tradeSettings.pctBuyOrders;
-  if (aggressiveOrder) {
+  (tradeSettings1.upperTradeVolume - tradeSettings1.lowerTradeVolume)
+) + tradeSettings1.lowerTradeVolume);
+  const buy = Math.random() <= tradeSettings1.pctBuyOrders;
+  if (agressiveOrder) {
     let price;
     if (buy) {
+      // price will be N(currentPrice * constant, constant) above current price
       price = streamedData.current.currentPrice +
-      randomNormal(streamedData.current.currentPrice * tradeSettings.avgPriceDeviation,
-        streamedData.current.currentPrice * tradeSettings.stdPriceDeviation);
+      randomNormal(streamedData.current.currentPrice * tradeSettings1.avgPriceDeviation,
+      streamedData.current.currentPrice * tradeSettings1.stdPriceDeviation);
     } else {
+      // price will be N(currentPrice * constant, constant) below current price
       price = streamedData.current.currentPrice -
-      randomNormal(streamedData.current.currentPrice * tradeSettings.avgPriceDeviation,
-        streamedData.current.currentPrice * tradeSettings.stdPriceDeviation);
-        console.log('value1:', streamedData.current.currentPrice * tradeSettings.avgPriceDeviation);
-        console.log('value2:', streamedData.current.currentPrice * tradeSettings.stdPriceDeviation);
-      console.log('randomnormal:', randomNormal(streamedData.current.currentPrice * tradeSettings.avgPriceDeviation,
-        streamedData.current.currentPrice * tradeSettings.stdPriceDeviation));
+      randomNormal(streamedData.current.currentPrice * tradeSettings1.avgPriceDeviation,
+      streamedData.current.currentPrice * tradeSettings1.stdPriceDeviation);
     }
-    console.log('price3:', price);
+    console.log('RETURNING:', {volume, buy, participant_id, price, time, id: orderCounter.current});
     return {volume, buy, participant_id, price, time, id: orderCounter.current};
-  } else {
-    const limitOrder = Math.random() <= tradeSettings.pctLimitOrders;
+  } else { // non-agressive order
+    // probability of choosing a limit order
+    const limitOrder = Math.random() <= tradeSettings1.pctLimitOrders;
     if (limitOrder) {
       let price;
       if (buy) {
+        // price will be N(currentPrice * constant, constant) below current price
         price = streamedData.current.currentPrice -
-        randomNormal(streamedData.current.currentPrice * tradeSettings.avgPriceDeviation,
-        streamedData.current.currentPrice * tradeSettings.stdPriceDeviation);
+        randomNormal(streamedData.current.currentPrice * tradeSettings1.avgPriceDeviation,
+        streamedData.current.currentPrice * tradeSettings1.stdPriceDeviation);
     } else {
+      // price will be N(currentPrice * constant, constant) above current price
         price = streamedData.current.currentPrice +
-        randomNormal(streamedData.current.currentPrice * tradeSettings.avgPriceDeviation,
-        streamedData.current.currentPrice * tradeSettings.stdPriceDeviation);
+        randomNormal(streamedData.current.currentPrice * tradeSettings1.avgPriceDeviation,
+        streamedData.current.currentPrice * tradeSettings1.stdPriceDeviation);
     }
-    console.log('price4:', price);
+    console.log('RETURNING:', {volume, buy, participant_id, price, time, id: orderCounter.current});
     return {volume, buy, participant_id, price, time, id: orderCounter.current};
     } else {
+      // market order
       const price = streamedData.current.currentPrice;
-      console.log('price2:', price);
+      console.log('RETURNING:', {volume, buy, participant_id, price, time, id: orderCounter.current});
       return {volume, buy, participant_id, price, time, id: orderCounter.current};
     }
   }
 }
 
+// second implementation of an order generator simulator function
+// volume determination policy: same as previous
+// price determination: biased towards underrepresented area
+// (more buys if buy volume is low and vice versa)
+
+function orderGenerator2(pid) {
+  const time = streamedData.current.currentTime;
+  orderCounter.current++;
+  // determine buying probability, based on imbalance between bids and asks
+  // if order book is empty on either side -> imbalance = 0
+  console.log('BIDBOOK PRINTOUT:', streamedData.bidBook);
+  let imbalance;
+  if (typeof streamedData.bidBook === "undefined"
+    || typeof streamedData.askBook === "undefined"
+    || streamedData.bidBook.length === 0
+    || streamedData.askBook.length === 0
+  ) {
+    imbalance = 0;
+  } else {
+    const nBids = streamedData.bidBook.length;
+    const nAsks = streamedData.askBook.price.length;
+    imbalance = (nBids - nAsks) / (nBids + nAsks + 1);
+  }
+  
+  // imbalance > 0 means more bids than asks -> bias towards buying more
+  // buying probability
+  const buy = Math.random() <= 0.5 + imbalance * tradeSettings2.k
+  const volume = Math.round((Math.random() * 
+  (tradeSettings2.upperTradeVolume - tradeSettings2.lowerTradeVolume)
+  ) + tradeSettings2.lowerTradeVolume);
+  const marketOrder = Math.random() <= tradeSettings2.pctMarketOrders;
+  if (marketOrder) {
+    // buy current price
+    console.log('RETURNING:', {volume, buy, pid, price: streamedData.current.currentPrice, time, id: orderCounter.current});
+    return {volume, buy, pid, price: streamedData.current.currentPrice, time, id: orderCounter.current};
+  } else {
+    // if buying: price = currentPrice + something
+    // if selling: price = currentPrice - something
+    const price =
+    randomNormal(streamedData.current.currentPrice * (1 + (buy ? 1 : -1) * tradeSettings2.avgPriceDeviation),
+    tradeSettings2.stdPriceDeviation * streamedData.current.currentPrice);
+    console.log('RETURNING:', {volume, buy, pid, price, time, id: orderCounter.current});
+    return {volume, buy, pid, price, time, id: orderCounter.current};
+  }
+
+}
+
+
+
 async function sendOrderBeforeMarketOpen(pid) {
-  const orderParams = orderGenerator(pid);
+  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid);
   console.log('orderparams:', orderParams);
   const resp = await fetch(`${BASEURL}/place_order`, {
             method: 'POST',
@@ -254,7 +322,7 @@ function subscribeMarketData() {
 console.log('market params', marketSettings);
 
 async function sendOrderAfterMarketOpen(pid) {
-  const orderParams = orderGenerator(pid);
+  const orderParams = tradeFunction === 0 ? orderGenerator1(pid) : orderGenerator2(pid);
   console.log('orderparams:', orderParams);
   console.log('TRYING TO SEND ORDER AFTER MARKET OPEN');
   const resp = await fetch(`${BASEURL}/place_order`, {
@@ -287,7 +355,7 @@ async function oneParticipantTradeCycleAfterMarketOpen(id) {
     currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
     //console.log('seen currenttime:', currentTimeDate);
     if (c % n === 0) {
-      const chanceToTrade = tradeSettings.avgTradesAfterMarketOpen / 60;
+      const chanceToTrade = tradeSettings1.avgTradesAfterMarketOpen / 60;
       if (Math.random() <= chanceToTrade) sendOrderAfterMarketOpen(id);
     }
     c++;
@@ -324,7 +392,7 @@ async function oneParticipantTradeCycleBeforeMarketOpen(id) {
     console.log('seen currenttime:', currentTimeDate);
 
     if (c % n === 0) {
-      const chanceToTrade = tradeSettings.avgTradesBeforeMarketOpen / 60;
+      const chanceToTrade = tradeSettings1.avgTradesBeforeMarketOpen / 60;
       if (Math.random() <= chanceToTrade) sendOrderBeforeMarketOpen(id);
     }
     c++;
@@ -453,7 +521,7 @@ async function startSimulation() {
             display: 'flex', gap: '10px', justifyContent: 'space-between'
           }}>
             <div>{key}</div>
-            <input type="text" value={value} onChange={(e) => setMarketSettings(
+            <input type="text" value={value} onChange={(e) => setmarketSettings(
               (prev) => ({...prev, [key]: e.target.value})
             )}
             />
@@ -464,17 +532,47 @@ async function startSimulation() {
       <div className='trade-settings' style={{
         display: 'flex', flexDirection: 'column', alignContent: 'center'
       }}>
-        {Object.entries(tradeSettings).map(([key, value]) => (
+        {tradeFunction === 0 ?
+        /// trade function 1
+        Object.entries(tradeSettings1).map(([key, value]) => (
           <div key={key} style={{
             display: 'flex', gap: '10px', justifyContent: 'space-between'
           }}>
             <div>{key}</div>
-            <input type="text" value={value} onChange={(e) => setTradeSettings(
+            <input type="text" value={value} onChange={(e) => setTradeSettings1(
               (prev) => ({...prev, [key]: e.target.value})
             )}
             />
           </div>
-        ))}
+        )) : 
+        // trade function 2
+        Object.entries(tradeSettings2).map(([key, value]) => (
+          <div key={key} style={{
+            display: 'flex', gap: '10px', justifyContent: 'space-between'
+          }}>
+            <div>{key}</div>
+            <input type="text" value={value} onChange={(e) => setTradeSettings2(
+              (prev) => ({...prev, [key]: e.target.value})
+            )}
+            />
+          </div>
+        ))
+      }
+      </div>
+
+      <div className='trade-setting-chooser'>
+        <button className='switch-settings' type='button'
+        style={{
+          backgroundColor: 'grey',
+          border: 'none',
+          borderRadius: '5px',
+          color: 'white',
+          width: '10rem',
+          height: '3rem'
+        }}
+        onClick={() => tradeFunction === 0 ? setTradeFunction(1) : setTradeFunction(0)}
+        >Switch Order Policy Funcion</button>
+        <div className='trade-settings-label'>Chosen: {tradeFunction === 0 ? 'First' : 'Second'}</div>
       </div>
 
       </div>
