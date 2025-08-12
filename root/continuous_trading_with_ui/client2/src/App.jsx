@@ -101,14 +101,14 @@ const streamDataRef = useRef(streamData);
 
 useEffect(() => {
   if (
-    typeof streamData.currentTime === 'string' &&
-    typeof streamData.currentPrice === 'number' &&
+    typeof streamDataRef.current.currentTime === 'string' &&
+    typeof streamDataRef.current.currentPrice === 'number' &&
     !readyToRun.current
   ) {
     readyToRun.current = true;
     startSimulation();
   }
-}, [streamData.currentTime, streamData.currentPrice]);
+}, [streamDataRef.current.currentTime, streamDataRef.current.currentPrice]);
 
   const readyToRun = useRef(false);
 
@@ -140,14 +140,7 @@ useEffect(() => {
   });
 
   const [priceDrift, setPriceDrift] = useState(null);
-
-  useEffect(() => {
-
-  if (typeof streamData.currentTime === 'string' &&
-      typeof streamData.currentPrice === 'number') {
-      readyToRun.current = true;
-  }
-}, [streamData.currentTime]);
+  const priceDriftRef = useRef(null);
 
   
 
@@ -163,6 +156,7 @@ useEffect(() => {
     // using the mean and std:
     volumeMean: 2,
     volumeStd: 0.5,
+    buyBias: 0.8
   });
 
   // second method for determining order flow from participants
@@ -187,30 +181,34 @@ useEffect(() => {
     A: 0.5,
     B: 1,
     C: 0,
-    pctBuyOrders: 0.5
+    pctBuyOrders: 0.5,
+    buyBias: 0.8
   });
-
-  useEffect(() => {
-  console.log('streamData.currentPrice changed to:', streamData.currentPrice);
-}, [streamData.currentPrice]);
 
 
   async function sendOrder(pid) {
     let vol;
     let buy;
+    const buyBias = priceDriftRef.current / streamDataRef.current.currentPrice - 1;
     if (orderMethod === 0) {
       vol = Math.exp(randomNormal(tradeSettings1.volumeMean, tradeSettings1.volumeStd));
-      buy = Math.random() <= tradeSettings1.pctBuyOrders;
+      
+      buy = Math.random() <= Math.min(Math.max(
+      tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias
+      , 0), 1);
     } else {
+      console.log('VALUE:', tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias);
       vol = Math.exp(randomNormal(tradeSettings2.volumeMean, tradeSettings2.volumeStd));
-      buy = Math.random() <= tradeSettings2.pctBuyOrders;
+      buy = Math.random() <= Math.min(Math.max(
+      tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias
+      , 0), 1);
     }
     
     const orderParams = {
       price: priceDrift,
       volume: vol,
       buy: buy,
-      time: streamData.currentTime,
+      time: streamDataRef.current.currentTime,
       participant_id: pid,
       id: orderCounter.current
     };
@@ -228,11 +226,11 @@ useEffect(() => {
 
   async function participantCycle1(pid, lambda_i, endTime) {
     // trade cycle for one participant
-    let [hc, mc, sc] = streamData.currentTime.split(":").map(Number);
+    let [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
     let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
     while (currentTimeDate < endTime) {
       // update current time
-      [hc, mc, sc] = streamData.currentTime.split(":").map(Number);
+      [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
       currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
 
       // determine waiting period (exponential distribution)
@@ -278,21 +276,21 @@ useEffect(() => {
 async function priceDriftCycle() {
   const [hcl, mcl, scl] = marketSettings.close_time.split(":").map(Number);
   const closeTimeDate = new Date(1970, 0, 1, hcl, mcl, scl);
-  let [hc, mc, sc] = streamData.currentTime.split(":").map(Number);
+  let [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
   let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
-  console.log('CONDITION:', currentTimeDate < closeTimeDate);
   while (currentTimeDate < closeTimeDate) {
     // use the discrete geometric brownian motion formula
-    const VAL = streamData.currentPrice * Math.exp(
+    const VAL = streamDataRef.current.currentPrice * Math.exp(
       (tradeSettings2.avgGrowthRate - 0.5 * tradeSettings2.priceVolatility**2)
       * tradeSettings2.priceDriftTimestep
       + tradeSettings2.priceVolatility * Math.sqrt(tradeSettings2.priceDriftTimestep)
       * randomNormal(0, 1)
     );
     console.log('VAL:', VAL);
-    setPriceDrift(VAL);
+    priceDriftRef.current = VAL;
+    setPriceDrift(priceDriftRef.current);
     await new Promise(r => setTimeout(r, 1000 * tradeSettings2.priceDriftTimestep));
-    [hc, mc, sc] = streamData.currentTime.split(":").map(Number);
+    [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
     currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
   }
 
@@ -535,7 +533,7 @@ async function subscribeMarketData() {
           fontWeight: 'bold',
           marginTop: '5px'
         }}>
-          {`Current time: ${streamData.currentTime}`}
+          {`Current time: ${streamDataRef.current.currentTime}`}
         </div>
         ) : (<></>)
       }
@@ -547,7 +545,7 @@ async function subscribeMarketData() {
           fontWeight: 'bold',
           marginTop: '5px'
         }}>
-          {`Current price: ${streamData.currentPrice}`}
+          {`Current price: ${streamDataRef.current.currentPrice}`}
         </div>
         ) : (<></>)
       }
