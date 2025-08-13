@@ -21,7 +21,7 @@ Details:
 The price direction bias does not decide the course of the actual asset price (in this case the last traded price), in the way that it automatically steers the market direction, but makes it such that the incoming orders will get placed higher or lower.  
 The method I'm using here is Geometric Brownian Motion: https://en.wikipedia.org/wiki/Geometric_Brownian_motion  
 The next target price gets calculated using  
-$$ S_{t+\Delta t} = S_t\cdot \text{exp}((\mu-\frac{1}{2}\sigma^2)\Delta t+\sigma\sqrt{\Delta t}Z) $$  
+$$ S_{t+\Delta t} = S_t\cdot\text{exp}((\mu-\frac{1}{2}\sigma^2)\Delta t+\sigma\sqrt{\Delta t}Z) $$  
 Where  
 $\Z\sim\mathcal{N}(0,1)$  
 $\mu$ is the general market direction (positive means upsloping)  
