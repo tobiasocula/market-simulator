@@ -4,3 +4,40 @@
   padding: 2rem;
   text-align: center;
 }
+
+.end-simulation {
+  background-color: red;
+  border: none;
+  color: white;
+  width: 10rem;
+  height: 3rem;
+}
+
+.start-simulation {
+  background-color: green;
+  border: none;
+  color: white;
+  width: 10rem;
+  height: 3rem;
+}
+
+.start-simulation:hover {
+  background-color: rgb(7, 159, 7);
+}
+
+.end-simulation:hover {
+  background-color: rgb(218, 81, 81);
+}
+
+.switch-settings {
+  background-color: grey;
+  border: none;
+  border-radius: 5px;
+  color: white;
+  width: 10rem;
+  height: 3rem;
+}
+
+.switch-settings:hover {
+  background-color: rgb(165, 165, 165);
+}
