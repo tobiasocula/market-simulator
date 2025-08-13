@@ -356,6 +356,7 @@ async def check_trades():
         and not app.state.ask_book.empty
         and app.state.bid_book.iloc[0]['price'] >= app.state.ask_book.iloc[0]['price']
     ):
+        logger.info('CHECKING TRADES')
         if app.state.bid_book.iloc[0]['volume'] < app.state.ask_book.iloc[0]['volume']:
             # more ask than bid volume
             async with app.state.ask_book_lock:

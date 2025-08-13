@@ -13,7 +13,27 @@ function randomNormal(mean, stdDev) {
   return z0 * stdDev + mean;
 }
 
-function OrderBookTable({ orders }) {
+function OrderBookTable({ orders, orderMaxLength }) {
+
+  const f = () => {
+    if (orders) {
+      if (orders.length > orderMaxLength) {
+        return orders.slice(0, orderMaxLength);
+      } else {
+        const r = [];
+        [...Array(orderMaxLength - orders.length)].forEach(i => r.push({
+          price: "", volume: "", time: ""
+        }));
+        return orders.concat(r);
+      }
+  } else {
+    const r = [];
+    [...Array(orderMaxLength)].forEach(i => r.push({
+      price: "", volume: "", time: ""
+    }));
+    return r;
+  }
+}
 
   return (
     <div className='table-div' style={{
@@ -28,18 +48,16 @@ function OrderBookTable({ orders }) {
         </tr>
       </thead>
       <tbody>
-        {orders ? orders.map(({ price, volume, time }, idx) => (
+        {f(orders).map(({ price, volume, time }, idx) => (
           <tr key={idx} style={{ borderBottom: '1px solid #222' }}>
-            <td style={{ textAlign: 'right', padding: '4px' }}>{price.toFixed(2)}</td>
-            <td style={{ textAlign: 'right', padding: '4px' }}>{volume}</td>
-            <td style={{ textAlign: 'center', padding: '4px' }}>{time}</td>
+            <td style={{ textAlign: 'right', padding: '4px' }}>{price !== "" ? price : "\u00A0"}</td>
+            <td style={{ textAlign: 'right', padding: '4px' }}>{volume !== "" ? volume : "\u00A0"}</td>
+            <td style={{ textAlign: 'center', padding: '4px' }}>{time !== "" ? time : "\u00A0"}</td>
           </tr>
         ))
-        : <></>}
+        }
       </tbody>
     </table>
-
-    
     </div>
   );
 }
@@ -70,21 +88,7 @@ function Terminal({ logs }) {
 
 function App() {
 
-  const handleStartClick = async () => {
-    console.log('test');
-  // init market
-  const initMarketResp = await fetch(`${BASEURL}/init_market`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(marketSettings)
-  });
-  if (initMarketResp.status !== 200) {
-    throw new Error('failed to init market:', initMarketResp.status);
-  }
-
-  // subscribe to market data and wait for validation
-  await subscribeMarketData();
-};
+  
 
 const [streamData, setStreamData] = useState({
     bidBook: null,
@@ -99,18 +103,43 @@ const [streamData, setStreamData] = useState({
 
 const streamDataRef = useRef(streamData);
 
-useEffect(() => {
+
+
+  const [readyToRun, setReadyToRun] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
   if (
     typeof streamDataRef.current.currentTime === 'string' &&
     typeof streamDataRef.current.currentPrice === 'number' &&
-    !readyToRun.current
+    !running
   ) {
-    readyToRun.current = true;
+    addGeneralLog('Starting simulation')
     startSimulation();
   }
-}, [streamDataRef.current.currentTime, streamDataRef.current.currentPrice]);
+}, [streamDataRef.current.currentTime, streamDataRef.current.currentPrice, readyToRun]);
 
-  const readyToRun = useRef(false);
+  const handleStartClick = async () => {
+    console.log('test');
+    addGeneralLog('Pressed start button');
+  // init market
+  const initMarketResp = await fetch(`${BASEURL}/init_market`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(marketSettings)
+  });
+  if (initMarketResp.status !== 200) {
+    throw new Error('failed to init market:', initMarketResp.status);
+  }
+  addGeneralLog('Initialized market');
+
+  // subscribe to market data and wait for validation
+  await subscribeMarketData();
+  addGeneralLog('Subscribed to market data');
+
+  // after all is done for prep -> set ready to true
+  setReadyToRun(true);
+};
 
   
 
@@ -142,7 +171,7 @@ useEffect(() => {
   const [priceDrift, setPriceDrift] = useState(null);
   const priceDriftRef = useRef(null);
 
-  
+  const [limitRowsOB, setLimitRowsOB] = useState(10);
 
   // first method for determining order flow from participants
   // the goal is to determine the timeDelta interval in which a new order will be sent
@@ -163,7 +192,7 @@ useEffect(() => {
   // the goal is to determine amount of orders in a fixed timedelta interval
   // this amount is sampled from a poisson distribution
   const [tradeSettings2, setTradeSettings2] = useState({
-    tradeWaitStep: 0.5, // sec, timedelta length for order sampling
+    tradeWaitStep: 0.2, // sec, timedelta length for order sampling
     avgGrowthRate: 0.01, // avg growth rate (increase in price) per timedelta
     priceDriftTimestep: 1, // sec, timedelta length for price drift cycle
     priceVolatility: 0.02, // units of price
@@ -174,13 +203,13 @@ useEffect(() => {
     // lambda parameter:
     // determines rate of order sending
     // is sampled for every participant out of normal distribution:
-    lambdaSampleMean: 1,
+    lambdaSampleMean: 3,
     lambdaSampleSTD: 0.2,
     // function for determining number of orders in timedelta interval:
     // N = lambda + A*sin(B*t + C)
-    A: 0.5,
-    B: 1,
-    C: 0,
+    // we transform this into: N = lambda + a*sin(2*pi/(marketClose - marketOpen) * (t - marketOpen + marketOpenOffset))
+    lambdaSinAmplitude: 0.5,
+    marketOpenOffset: 0, // highest value at market open, if positive -> shift to right
     pctBuyOrders: 0.5,
     buyBias: 0.8
   });
@@ -197,7 +226,6 @@ useEffect(() => {
       tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias
       , 0), 1);
     } else {
-      console.log('VALUE:', tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias);
       vol = Math.exp(randomNormal(tradeSettings2.volumeMean, tradeSettings2.volumeStd));
       buy = Math.random() <= Math.min(Math.max(
       tradeSettings2.pctBuyOrders + buyBias * tradeSettings2.buyBias
@@ -205,7 +233,7 @@ useEffect(() => {
     }
     
     const orderParams = {
-      price: priceDrift,
+      price: priceDriftRef.current,
       volume: vol,
       buy: buy,
       time: streamDataRef.current.currentTime,
@@ -222,7 +250,21 @@ useEffect(() => {
     if (resp.status !== 200) {
       throw new Error('failed to send order after market open:', resp.status);
     }
+    addOrderLog(`Sent order from ${pid} @ ${orderParams.price}, volume ${orderParams.volume} at ${orderParams.time}`);
   }
+
+  // helper function
+  const strToMin = (timestring) => {
+    const [h, m, s] = timestring.split(':');
+    return Number(h) * 60 + Number(m);
+  }
+
+  // helper constants
+  const openTimeMins = strToMin(marketSettings.open_time);
+  const closeTimeMins = strToMin(marketSettings.close_time);
+  const nMinsSession = closeTimeMins - openTimeMins;
+
+  
 
   async function participantCycle1(pid, lambda_i, endTime) {
     // trade cycle for one participant
@@ -244,31 +286,45 @@ useEffect(() => {
     }
   }
 
+  console.log('readytorun:', readyToRun);
+
   async function participantCycle2(pid, lambda_i, endTime) {
   let [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
   let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
 
   // Stop once end time is reached
+  
   while (currentTimeDate < endTime) {
+    //console.log(`PID ${pid}: currentTimeDate=${currentTimeDate.toTimeString()} endTime=${endTime.toTimeString()}`);
     [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
     currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
-    const lambda_t = lambda_i + tradeSettings2.A * Math.sin(
-    tradeSettings2.B + tradeSettings2.C
+    
+    const lambda_t = lambda_i + tradeSettings2.lambdaSinAmplitude * Math.sin(
+    2 * Math.PI / nMinsSession *
+    (strToMin(streamDataRef.current.currentTime) - 5/4 * openTimeMins -
+    closeTimeMins / 4 + tradeSettings2.marketOpenOffset)
     );
 
     const u = Math.random();
     let cumRes = 0;
     let c = 0;
     let cumFact = 1;
+    const expNegLambda = Math.exp(-lambda_t);
     while (cumRes <= u) {
-      cumRes += Math.log(-lambda_t) * lambda_t**c / cumFact;
+      cumRes += Math.pow(lambda_t, c) * expNegLambda / cumFact;
       c++;
       cumFact *= c;
     }
+    c--;
+    console.log('c:', c);
 
     for (let i = 0; i < c; i++) {
       await sendOrder(pid);
+      //await new Promise(r => setTimeout(r, Math.random() * 1000 * tradeSettings2.tradeWaitStep));
+      
     }
+    console.log(`PID ${pid}: currentTimeDate=${currentTimeDate.toTimeString()} endTime=${endTime.toTimeString()}`);
+    await new Promise(r => setTimeout(r, 1000 * tradeSettings2.tradeWaitStep));
   }
 }
   
@@ -280,14 +336,12 @@ async function priceDriftCycle() {
   let currentTimeDate = new Date(1970, 0, 1, hc, mc, sc);
   while (currentTimeDate < closeTimeDate) {
     // use the discrete geometric brownian motion formula
-    const VAL = streamDataRef.current.currentPrice * Math.exp(
+    priceDriftRef.current = streamDataRef.current.currentPrice * Math.exp(
       (tradeSettings2.avgGrowthRate - 0.5 * tradeSettings2.priceVolatility**2)
       * tradeSettings2.priceDriftTimestep
       + tradeSettings2.priceVolatility * Math.sqrt(tradeSettings2.priceDriftTimestep)
       * randomNormal(0, 1)
     );
-    console.log('VAL:', VAL);
-    priceDriftRef.current = VAL;
     setPriceDrift(priceDriftRef.current);
     await new Promise(r => setTimeout(r, 1000 * tradeSettings2.priceDriftTimestep));
     [hc, mc, sc] = streamDataRef.current.currentTime.split(":").map(Number);
@@ -345,17 +399,19 @@ async function subscribeMarketData() {
 
   // return only if connection has been established
 
-  // wait for websocket messages to be able to go through
-  const waitWSResponse = await fetch(`${BASEURL}/wait_for_ws_connection`);
-  if (waitWSResponse.status !== 200) {
-    throw new Error('failed to wait for ws:', waitWSResponse.status);
-  }
+  // // wait for websocket messages to be able to go through
+  // const waitWSResponse = await fetch(`${BASEURL}/wait_for_ws_connection`);
+  // if (waitWSResponse.status !== 200) {
+  //   throw new Error('failed to wait for ws:', waitWSResponse.status);
+  // }
 
   // for being able to close socket later
   return socket;
 }
 
   async function startSimulation() {
+    setReadyToRun(false);
+    setRunning(true);
 
   addGeneralLog('started simulation');
 
@@ -363,10 +419,12 @@ async function subscribeMarketData() {
 
   // activate price drift cycle (directional bias)
   // create price drift cycle
+  addGeneralLog('activated price drift cycle');
   priceDriftCycle();
 
   // activate trade cycle (depending on which method), for pre-market open
   const tasksBefMarketOpen = pIDs.map(p => {
+    console.log('P:', p);
     if (orderMethod === 0) {
       const lambda_i = randomNormal(tradeSettings1.lambdaSampleMean, tradeSettings1.lambdaSampleSTD);
       const [hcl, mcl, scl] = marketSettings.open_time.split(":").map(Number);
@@ -412,58 +470,51 @@ async function subscribeMarketData() {
 
 
   return (
-    <>
-      <div className='horizontal-layers' style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      padding: '10px',
-      gap: '10px'
+    <div className='main' style={{
+      display: 'flex', gap: '5rem'
     }}>
-      <div className='control-layer' style={{
-          display: 'flex',
-          gap: '10px',
-          marginTop: '10px'
-        }}>
-          <div className='buttons' style={{
-            display: 'flex', flexDirection: 'column', justifyContent: 'space-around'
+    <div className='left-section'>
+    <div className='order-book' style={{display: 'flex', marginBottom: '1rem'}}>
+      <div style={{
+          flex: '1 1 50%',
+          minWidth: '400px',
+          backgroundColor: 'rgba(0, 200, 0, 0.08)',
+          // height: '10rem'
           }}>
-          <button
-            className="start-simulation"
-            onClick={handleStartClick}
-            disabled={!readyToRun}
-            style={{
-              backgroundColor: 'green',
-              border: 'none',
-              borderRadius: '5px',
-              color: 'white',
-              width: '5rem',
-              height: '3rem'
-            }}
-          >
-            Start
-          </button>
-          <button
-            className="end-simulation"
-            onClick={() => {
-              window.location.reload();
-            }}
-            disabled={!readyToRun}
-            style={{
-              backgroundColor: 'red',
-              border: 'none',
-              borderRadius: '5px',
-              color: 'white',
-              width: '5rem',
-              height: '3rem'
-            }}
-          >
-            End
-          </button>
+          <OrderBookTable orders={streamData.bidBook} orderMaxLength={limitRowsOB}
+          />
       </div>
-
+      <div style={{
+            flex: '1 1 50%',
+            minWidth: '400px',
+            backgroundColor: 'rgba(200, 0, 0, 0.08)',
+            // height: '10rem'
+          }}>
+          <OrderBookTable orders={streamData.askBook} orderMaxLength={limitRowsOB}
+          />
+      </div>
+    </div>
+    <div className='terminals' style={{
+      display: 'flex', flexDirection: 'column'
+    }}>
+      <Terminal logs={generalLog} style={{
+        minHeight: '100px',
+        maxHeight: '150px',
+        width: '15rem' }} />
+      <Terminal logs={orderLogs} style={{
+        minHeight: '100px',
+        maxHeight: '150px',
+        width: '15rem' }} />
+      <Terminal logs={tradeLogs} style={{
+        minHeight: '100px',
+        maxHeight: '150px',
+        width: '15rem' }} />
+    </div>
+    </div>
+    <div className='settings-section'>
       <div className='market-settings' style={{
-        display: 'flex', flexDirection: 'column', alignContent: 'center'
+        display: 'flex', flexDirection: 'column', alignContent: 'center',
+        margin: '10px'
       }}>
         {Object.entries(marketSettings).map(([key, value]) => (
           <div key={key} style={{
@@ -471,15 +522,15 @@ async function subscribeMarketData() {
           }}>
             <div>{key}</div>
             <input type="text" value={value} onChange={(e) => setmarketSettings(
-              (prev) => ({...prev, [key]: e.target.value})
+              (prev) => ({...prev, [key]: Number(e.target.value)})
             )}
             />
           </div>
         ))}
       </div>
-
       <div className='trade-settings' style={{
-        display: 'flex', flexDirection: 'column', alignContent: 'center'
+        display: 'flex', flexDirection: 'column', alignContent: 'center',
+        margin: '10px'
       }}>
         {orderMethod === 0 ?
         /// trade function 1
@@ -508,101 +559,73 @@ async function subscribeMarketData() {
         ))
       }
       </div>
-
-      <div className='trade-setting-chooser'>
-        <button className='switch-settings' type='button'
-        style={{
-          backgroundColor: 'grey',
-          border: 'none',
-          borderRadius: '5px',
-          color: 'white',
-          width: '10rem',
-          height: '3rem'
-        }}
-        onClick={() => orderMethod === 0 ? setOrderMethod(1) : setOrderMethod(0)}
-        >Switch Order Policy Funcion</button>
-        <div className='trade-settings-label'>Chosen: {orderMethod === 0 ? 'First' : 'Second'}</div>
+      <div className='order-len'>
+        <div style={{
+            display: 'flex', gap: '10px', justifyContent: 'space-between',
+            marginBottom: '1rem'
+          }}>
+            <div>Order book length</div>
+            <input type="text" value={limitRowsOB} onChange={(e) => setLimitRowsOB(Number(e.target.value))}
+            />
+          </div>
       </div>
 
-      </div>
-
-      <div className='sub-layer'>
-        <div className='current-time-sec'>{readyToRun ? (
+      <div className='data-stream'>
+        <div>{running && (
           <div className='current-time' style={{
           fontSize: '1.1rem',
           fontWeight: 'bold',
           marginTop: '5px'
         }}>
           {`Current time: ${streamDataRef.current.currentTime}`}
-        </div>
-        ) : (<></>)
-      }
+        </div>)}
       </div>
-      <div className='current-price-sec'>
-        {readyToRun ? (
-          <div className='current-price' style={{
-          fontSize: '1.1rem',
-          fontWeight: 'bold',
-          marginTop: '5px'
-        }}>
-          {`Current price: ${streamDataRef.current.currentPrice}`}
-        </div>
-        ) : (<></>)
-      }
-      </div>
-      <div className='current-price-drift'>
-        {readyToRun ? (
-          <div className='current-price' style={{
-          fontSize: '1.1rem',
-          fontWeight: 'bold',
-          marginTop: '5px'
-        }}>
-          {`Current price: ${priceDrift}`}
-        </div>
-        ) : (<></>)
-      }
-      </div>
-      </div>
-
-      <div className='view-layer' style={{
-        display: 'flex',
-        justifyContent: 'center',
-        gap: '20px',
-        alignItems: 'flex-start',  // prevent stretching tall empty logs
-        width: '100%',
-        maxWidth: '1200px'
-      }}>
-        <div style={{
-          flex: '1 1 50%',
-          minWidth: '400px',
-          backgroundColor: 'rgba(0, 200, 0, 0.08)'
+        <div>{running && (
+            <div className='current-price' style={{
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+            marginTop: '5px'
           }}>
-          <OrderBookTable orders={streamData.bidBook}
-          />
+            {`Current price: ${streamDataRef.current.currentPrice}`}
+          </div>)}
         </div>
-        <div style={{
-            flex: '1 1 50%',
-            minWidth: '400px',
-            backgroundColor: 'rgba(200, 0, 0, 0.08)'
+          <div>{running && (
+            <div className='current-price-drift' style={{
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+            marginTop: '5px'
           }}>
-          <OrderBookTable orders={streamData.askBook}
-          />
+            {`Current price drift: ${priceDriftRef.current}`}
+          </div>)}
         </div>
-        <div className='logs' style={{
-          flex: '1 1 50%',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px'
-        }}>
-          <Terminal logs={generalLog} style={{ minHeight: '150px', maxHeight: '200px' }} />
-          <Terminal logs={orderLogs} style={{ minHeight: '150px', maxHeight: '200px' }} />
-          <Terminal logs={tradeLogs} style={{ minHeight: '150px', maxHeight: '200px' }} />
-        </div>
+      </div>
+      
+      <div className='buttons' style={{display: 'flex'}}>
+        
+        <button
+            className="start-simulation"
+            onClick={handleStartClick}
+            disabled={readyToRun}
+          >
+            Start Simulation
+          </button>
+          <button
+            className="end-simulation"
+            onClick={() => {
+              window.location.reload();
+            }}
+            disabled={!running}
+          >
+            End Simulation
+          </button>
+          <button className='switch-settings' type='button'
+        onClick={() => orderMethod === 0 ? setOrderMethod(1) : setOrderMethod(0)}
+        >Switch Order Policy Funcion
+        </button>
 
       </div>
-
     </div>
-    </>
+    </div>
   )
 }
 
