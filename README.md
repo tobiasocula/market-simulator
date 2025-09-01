@@ -12,7 +12,7 @@ The market is represented as a FastAPI backend. The open price gets calculated i
 ### 3. Same as above, but with GUI + much better implementation  
 This uses a React frontend application alongside with the FastAPI backend, meaning one can see the order book get updated in real time. There are also two order generation algorithms being used.  
 
-#### Details on implementation #3--  
+#### Details on implementation #3  
 
 For this implementation I've built two separate sub-implementations. The second implementation is much more realistic and uses rigorous academic concepts.  
 Details:  
