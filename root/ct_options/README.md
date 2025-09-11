@@ -14,4 +14,9 @@ $\text{Volume}=b\cdot\text{exp}(-a\text{ln}(S/K)-cT)$
 where $a$, $b$ and $c$ are parameters, $S$ is the asset price, $K$ is the strike and $T$ is the time until expiry (years).  
 After seeking to improve this formula, by introducing randomness (I realised my formula was completely deterministic) and using log-moneyness instead, to make sure that distances from either side of ATM were treated equally (I read about this at https://en.wikipedia.org/wiki/Moneyness, and https://quant.stackexchange.com/questions/59421/why-use-moneyness-as-an-axis-on-a-volatility-surface), I'm now using  
 $\text{Volume}=X\cdot b\cdot\text{exp}(-a\cdot |\text{log}(S/K)|-c\cdot T)$  
-I've now added $X\sim\text{lognormal}(\mu_X,\sigma_X)$.
+I've now added $X\sim\text{lognormal}(\mu_X,\sigma_X)$.  
+### Determining market vs. limit order  
+$\eta=\alpha_0+\sum_i\alpha_ix_i$  
+### Choosing a limit price  
+I decided to use a simple model, where I'm just sampling  
+$\text{Limit price}\sim\text{Exp}(\lambda)$
