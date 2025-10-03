@@ -800,8 +800,8 @@ def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, ass
 
                 )
 
-                #p_market = 1 / (1 + np.exp(-eta_lm)) # prob for market order
-                p_market = 0.5
+                p_market = 1 / (1 + np.exp(-eta_lm)) # prob for market order
+                #p_market = 0.5
 
                 logging.info(f"PROB FOR MARKET ORDER: {p_market}")
 
@@ -830,8 +830,8 @@ def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, ass
 
                 )
 
-                #p_buy = 1 / (1 + np.exp(-eta_bs)) # prob for buy
-                p_buy = 0.5
+                p_buy = 1 / (1 + np.exp(-eta_bs)) # prob for buy
+                #p_buy = 0.5
                 logging.info(f"PROB FOR buy ORDER: {p_buy}")
 
 
