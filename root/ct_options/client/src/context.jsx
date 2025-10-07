@@ -95,13 +95,15 @@ export const MyContextProvider = ({ children }) => {
 
           dividend_rate: 0.0,
 
-          lm_params: [-1.5, -0.8, 0.5, 0.7, 0.5],
+          // parameters: base, bid-ask imbalance, spread, recent volume
+          lm_params: [0.0, 0.8, 1.5, 0.9],
 
-          bs_params: [-1.5, -0.8, 0.5, 0.7, 0.5],
+          // parameters: base, bid-ask imbalance
+          bs_params: [0.0, -1.5],
 
- 
-
-          limit_dist: 1.0
+          limit_dist: 1.0,
+          init_iv: 0.14,
+          init_spread: 1.0
 
         });
 

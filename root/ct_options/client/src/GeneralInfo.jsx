@@ -213,8 +213,10 @@ function GeneralInfo() {
 
             className={running ? "pauze-simulation" : "pauze-simulation-disabled"}
             onClick={async () => {
+              console.log('PAUZE');
 
               const r = await fetch(`${MARKET_URL}/pauze`);
+              console.log('STATUS:', r.status);
 
               if (r.status !== 200) {
 
