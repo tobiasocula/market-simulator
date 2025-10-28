@@ -1,5 +1,3 @@
 import numpy as np
+from datetime import timedelta
 
-
-s = [0, 1, 2, 5, 6]
-print(np.cumsum(s))

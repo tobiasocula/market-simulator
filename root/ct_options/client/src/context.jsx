@@ -79,7 +79,8 @@ export const MyContextProvider = ({ children }) => {
 
           //expiry_dts: [3600*5, 36000, 3600*24, 3600*24*3, 3600*24*5, 3600*24*7],
 
-          expiry_dts: [3600*5, 36000],
+          // expiry_dts: [3600*5, 36000],
+          expiry_dts: [36000],
 
           tau: [[1.0, 1.0], [1.0, 1.0]],
 
@@ -96,7 +97,7 @@ export const MyContextProvider = ({ children }) => {
           dividend_rate: 0.0,
 
           // parameters: base, bid-ask imbalance, spread, recent volume
-          lm_params: [0.0, 0.8, 1.5, 0.9],
+          lm_params: [0.0, 0.8, 1.5,-0.5],
 
           // parameters: base, bid-ask imbalance
           bs_params: [0.0, -1.5],

@@ -11,6 +11,7 @@ import logging
 import threading
 from scipy.stats import norm
 from scipy.optimize import brentq # root finding method
+import time
 
 
 
@@ -335,6 +336,7 @@ def format_obs(struct):
     # strike: strike, ob: {
 
     # calls_bids: data1, calls_asks: data2, ..., data4}}}
+    print("STRUCT:", struct)
 
     def clean_arr(arr):
         if arr is None:
@@ -362,6 +364,15 @@ def format_obs(struct):
             puts_bids = struct[i,j,1,0]if struct[i,j,1,0] is not None else None
 
             puts_asks = struct[i,j,1,1] if struct[i,j,1,1] is not None else None
+            print('LENGTHS:', len(calls_bids), len(calls_asks), len(puts_bids), len(puts_asks))
+
+            # calls_bids = struct[i,j,0,0] if struct[i,j,0,0] is not None else None
+
+            # calls_asks = struct[i,j,1,0] if struct[i,j,1,0] is not None else None
+
+            # puts_bids = struct[i,j,0,1]if struct[i,j,0,1] is not None else None
+
+            # puts_asks = struct[i,j,1,1] if struct[i,j,1,1] is not None else None
 
             data.append({"strike": float(app.state.strikes[j]),
 
@@ -422,9 +433,12 @@ async def market_clock():
         await asyncio.sleep(app.state.market_data.update_rate)
 
 
-def imbalance_spread(exp_idx, strike_idx, type_idx):
-    ob_bids = app.state.contract_obs[exp_idx, strike_idx, type_idx, 0]
-    ob_asks = app.state.contract_obs[exp_idx, strike_idx, type_idx, 1]
+def imbalance_spread(contract_obs, exp_idx, strike_idx, type_idx):
+    ob_bids = contract_obs[exp_idx, strike_idx, type_idx, 0]
+    ob_asks = contract_obs[exp_idx, strike_idx, type_idx, 1]
+    logging.info(f'imb spread, ob_bids: {ob_bids}')
+    logging.info(f'imb spread, ob_asks: {ob_asks}')
+    logging.info(f"with contract obs: {contract_obs.tolist()}")
     if ob_bids is None or ob_asks is None or ob_bids == [] or ob_asks == []:
         return 0, 0
     agg_bids = sum([row[1] for row in ob_bids])
@@ -687,24 +701,10 @@ def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, 
 
 
 
-def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, asset_data, strikes, asset_ltp, expiry_times, recent_volume_sums, expiry_overviews):
+def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, asset_data, strikes, asset_ltp, expiry_times, recent_volume_sums, expiry_overviews, M):
+    logging.info('CALLED OPTION TRADE CYCLE')
 
-    def unpack(params):
-
-        def update(ps, valid):
-            last = ps[-1]
-            if last == valid[-1] - 1:
-                if len(ps) == 1:
-                    return [None]
-                return update(ps[:-1], valid[:-1]) + [0]
-            else:
-                return [k for k in ps[:-1]] + [last + 1]
-            
-        N = np.prod(params)
-        K = np.zeros(len(params))
-        for i in range(N):
-            yield K, i
-            K = update(K, params)
+    
     """
     should be running constantly
     returns True/False, args
@@ -714,8 +714,8 @@ def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, ass
 
     logging.info('option_trade_cycle')
 
-    max_order_size_sigma = 3
-    M = option_data.w * (max_order_size_sigma * option_data.contract_volume_std + option_data.contract_volume_mean)
+    # max_order_size_sigma = 3
+    # M = option_data.w * (max_order_size_sigma * option_data.contract_volume_std + option_data.contract_volume_mean)
 
     N = num_strikes * num_expiries * 2
 
@@ -737,173 +737,42 @@ def option_trade_cycle(option_data, num_expiries, num_strikes, current_time, ass
     with ThreadPoolExecutor(max_workers=4) as thread_pool:
         lambdas = list(thread_pool.map(intensity, args))
 
-    #logging.info('LAMBDAS:', lambdas)
+    logging.info(f'LAMBDAS: {lambdas}')
 
     Lambda = sum(lambdas)
+
+    logging.info(f"VALUES OF LAMBDA AND M: lambda {Lambda} and M: {M}")
 
     ex = -np.log(np.random.uniform()) / M
     print('ODDS:', Lambda / M)
 
-    if np.random.uniform() <= Lambda / M:
-        # order accepted
+    args = []
+    print('test!!!')
+    print(current_time); print(type(current_time))
 
-        candidate_lambdas = np.empty(N)
+    cand_time = current_time + timedelta(seconds=ex)
+    print('cand time:', cand_time)
+    for i in range(num_expiries):
 
-        candidate_args = []
+        for j in range(num_strikes):
 
-        candidate_Lambda = 0
+            args.append((cand_time, i, j, 0, hist, option_data, strikes, asset_ltp, expiry_times, num_expiries, num_strikes))
 
-        for i in range(num_expiries):
+            args.append((cand_time, i, j, 1, hist, option_data, strikes, asset_ltp, expiry_times, num_expiries, num_strikes))
 
-            for j in range(num_strikes):
+    logging.info('BEFORE POOL')
+    with ThreadPoolExecutor(max_workers=4) as thread_pool:
+        lambdas_prime = list(thread_pool.map(intensity, args))
+    logging.info('AFTER POOL')
 
-                candidate_args.append((current_time, i, j, 0, hist, option_data, strikes, asset_ltp, expiry_times, num_expiries, num_strikes))
+    Lambda_prime = sum(lambdas_prime)
 
-                candidate_args.append((current_time, i, j, 1, hist, option_data, strikes, asset_ltp, expiry_times, num_expiries, num_strikes))
-
-        with ThreadPoolExecutor(max_workers=4) as thread_pool:
-            results = list(thread_pool.map(intensity, candidate_args))
-
-        for i, result in enumerate(results):
-
-            candidate_lambdas[i] = result
-
-            candidate_Lambda += result
-
-        rel_probs = candidate_lambdas / candidate_Lambda
-
-
-        p = np.cumsum(np.sort(rel_probs))
-
-
-        #logging.info(f"P VALUES: {p}")
-
-        chosen_prob = np.random.uniform()
-        for param_arr, p_idx in unpack([
-            num_expiries, num_strikes, 2
-        ]):
-
-            i, j, c = param_arr
-            i, j, c = int(i), int(j), int(c)
-
-
-            if p[p_idx] >= chosen_prob:
-                # choose this contract for an order
-                #print("new order for contract", p_idx)
-                #logging.info(f"CHOOSING CONTRACT {p_idx}")
-
-                vol = int(np.random.lognormal(
-
-                        option_data.contract_volume_mean,
-
-                        option_data.contract_volume_std
-
-                    ) * option_data.volume_base * np.exp(
-
-                        -option_data.volume_moneyness * np.abs(np.log(
-
-                            asset_ltp / strikes[j]
-
-                        )) - option_data.volume_time_decay * (
-
-                            (current_time - expiry_times[i]).total_seconds() / (3600 * 24 * 365)
-
-                    )))
-                
-                if vol == 0: # round to nearest non-zero integer
-                    vol = 1
-
-                imb, spread = imbalance_spread(i, j, c)
-
-                eta_lm = (
-
-                    option_data.lm_params[0]
-
-                    + option_data.lm_params[1] * imb
-
-                    + option_data.lm_params[2] * spread
-
-                    + option_data.lm_params[3] * recent_volume_sums[i, j, c] # recent volume
-
-                )
-
-                p_market = 1 / (1 + np.exp(-eta_lm)) # prob for market order
-                #p_market = 0.5
-
-                #logging.info(f"PROB FOR MARKET ORDER: {p_market}")
-
-
-                # determine probability for buy or sell
-                # features of this GLM (feature vector):
-                # -imbalance between buys and sells
-                # -spread
-                # -recent trading volume
-                # -log of trade size
-                # -moneyness
-
-                
-
-                eta_bs = (
-
-                    option_data.bs_params[0] # base parameter
-
-                    + option_data.bs_params[1] * imb # imbalance
-
-                )
-
-                p_buy = 1 / (1 + np.exp(-eta_bs)) # prob for buy
-                #p_buy = 0.5
-                #logging.info(f"PROB FOR buy ORDER: {p_buy}")
-
-
-
-                # update history
-
-                buy = np.random.uniform() <= p_buy
-
-                entry = {
-
-                    "vol": vol,
-
-                    "side": 0 if buy else 1,
-
-                    "time": current_time
-
-                }
-
-                if hist[i, j, c] is None:
-
-                    hist[i, j, c] = [entry]
-
-                else:
-
-                    hist[i, j, c].append(entry)
-
-                # determine price
-
-                if np.random.uniform() <= p_market:
-
-                    # market order
-
-                    price = expiry_overviews[i, j, c][4] #!!!
-
-                else:
-
-                    # limit order
-
-                    # distance from ltp is exponentially distributed
-
-                    dist = -np.log(np.random.uniform()) / option_data.limit_dist
-                    #logging.info(f"LIMIT ORDER DIST: {dist}")
-
-                    price = asset_ltp + dist if not buy else asset_ltp - dist
-
-                #logging.info("RETURNING!!")
-
-                return True, i, j, c, current_time, vol, buy, price
-
+    if np.random.uniform() <= Lambda_prime / M:
+        logging.info('OTC RETURNING TRUE')
+        return True, Lambda, lambdas
     else:
-        return False, ex
+        logging.info('OTC RETURNING FALSE')
+        return False, M, cand_time.seconds
 
 
 @app.get("/pauze")
@@ -1062,6 +931,9 @@ async def init(data: Params):
 
     app.state.current_time = datetime.strptime(data.market_data.start_time, "%Y-%m-%d %H:%M:%S")
 
+    app.state.contract_volume_mean = data.option_data.contract_volume_mean
+    app.state.contract_volume_std = data.option_data.contract_volume_std
+
     app.state.expiry_times = [
 
         app.state.current_time + timedelta(seconds=t)
@@ -1156,13 +1028,17 @@ async def init(data: Params):
     app.state.tasks.append(asyncio.create_task(price_drift()))
     app.state.tasks.append(asyncio.create_task(market_clock()))
 
+    app.state.tasks.append(asyncio.create_task(recent_volume_checking_coro()))
     app.state.tasks.append(asyncio.create_task(trade_checking_coro()))
     app.state.tasks.append(asyncio.create_task(option_trade_cycle_coro()))
+    print('CREATED TASKS')
 
 async def recent_volume_checking_coro():
     loop = asyncio.get_event_loop()
 
     while True:
+
+        print('INSIDE recent_volume_checking_coro CORO')
 
         new_vol_arr, new_vol_sums = await loop.run_in_executor(app.state.pool, recent_volume_checking,
             app.state.num_expiries, app.state.num_strikes, app.state.recent_volume, app.state.current_time, app.state.recent_vol_delta)
@@ -1178,6 +1054,8 @@ async def trade_checking_coro():
     loop = asyncio.get_event_loop()
 
     while True:
+
+        print('INSIDE TRADE CHECKING CORO')
 
         contract_obs, expiry_overviews, recent_volume = await loop.run_in_executor(app.state.pool, trade_checking, 
                 app.state.contract_obs, app.state.current_time, app.state.expiry_overviews, app.state.recent_volume, app.state.strikes
@@ -1200,36 +1078,179 @@ async def trade_checking_coro():
 
 async def option_trade_cycle_coro():
 
+    hist = np.empty((app.state.num_expiries, app.state.num_strikes, 2), dtype=object)
+
+    def unpack(params):
+
+        def update(ps, valid):
+            last = ps[-1]
+            if last == valid[-1] - 1:
+                if len(ps) == 1:
+                    return [None]
+                return update(ps[:-1], valid[:-1]) + [0]
+            else:
+                return [k for k in ps[:-1]] + [last + 1]
+            
+        N = np.prod(params)
+        K = np.zeros(len(params))
+        for i in range(N):
+            yield K, i
+            K = update(K, params)
+
     loop = asyncio.get_event_loop()
 
-    print('called optoin trade cycle coro')
+    M = 1
 
     while True:
+
 
         args = await loop.run_in_executor(app.state.pool, option_trade_cycle, 
                     app.state.option_data, app.state.num_expiries, app.state.num_strikes,
                     app.state.current_time, app.state.asset_data, app.state.strikes, app.state.asset_price_drift, app.state.expiry_times,
-                    app.state.recent_volume_sums, app.state.expiry_overviews
+                    app.state.recent_volume_sums, app.state.expiry_overviews, M
             )
-        
-        print('args:', args)
         
         
         if args[0]:
+            # order accepted
 
-            # return True, i, j, c, current_time, vol, buy, price
-            expiry_idx, strike_idx, type_idx, trade_time, vol, buy, price = args[1:]
-            
-            # def place_order(expiry_idx, strike_idx, time, volume, buy, call, price, contract_obs, expiries, strikes):
-            contract_obs = await loop.run_in_executor(app.state.pool, place_order,
-                    expiry_idx, strike_idx, trade_time, vol, buy, type_idx == 0, price, app.state.contract_obs, app.state.expiry_times, app.state.strikes)
-            
-            async with app.state.contract_obs_lock:
-                app.state.contract_obs = contract_obs
+
+            M, lambdas = args[1:]
+
+            rel_probs = lambdas / np.sum(lambdas)
+            p = np.cumsum(rel_probs)
+            chosen_prob = np.random.uniform()
+
+
+            for param_arr, p_idx in unpack([
+                app.state.num_expiries, app.state.num_strikes, 2
+            ]):
+
+                i, j, c = [int(k) for k in param_arr]
+
+                if p[p_idx] >= chosen_prob:
+                   
+
+                    vol = int(np.random.lognormal(
+
+                        app.state.contract_volume_mean,
+
+                        app.state.option_data.contract_volume_std
+
+                    ) * app.state.option_data.volume_base * np.exp(
+
+                        -app.state.option_data.volume_moneyness * np.abs(np.log(
+
+                            app.state.asset_ltp / app.state.strikes[j]
+
+                        )) - app.state.option_data.volume_time_decay * (
+
+                            (app.state.expiry_times[i] - app.state.current_time).total_seconds() / (3600 * 24 * 365)
+
+                    )))
+
+                    
+                    if vol == 0: # round to nearest non-zero integer
+                        vol = 1
+
+                    #print('caulculating imb spread with contract obs', app.state.contract_obs)
+                    imb, spread = imbalance_spread(app.state.contract_obs, i, j, c)
+
+                    eta_lm = (
+
+                        app.state.option_data.lm_params[0]
+
+                        + app.state.option_data.lm_params[1] * imb
+
+                        + app.state.option_data.lm_params[2] * spread
+
+                        + app.state.option_data.lm_params[3] * app.state.recent_volume_sums[i, j, c] # recent volume
+
+                    )
+
+                    p_market = 1 / (1 + np.exp(-eta_lm)) # prob for market order
+                    #p_market = 0.5
+
+                    #logging.info(f"PROB FOR MARKET ORDER: {p_market}")
+
+
+                    # determine probability for buy or sell
+                    # features of this GLM (feature vector):
+                    # -imbalance between buys and sells
+                    # -spread
+                    # -recent trading volume
+                    # -log of trade size
+                    # -moneyness
+
+                    
+                    eta_bs = (
+
+                        app.state.option_data.bs_params[0] # base parameter
+
+                        + app.state.option_data.bs_params[1] * imb # imbalance
+
+                    )
+
+
+                    p_buy = 1 / (1 + np.exp(-eta_bs)) # prob for buy
+                    #p_buy = 0.5
+                    #logging.info(f"PROB FOR buy ORDER: {p_buy}")
+                    print('p buy:', p_buy, "with imbalance:", imb, 'and spread', spread)
+
+
+                    # update history
+
+                    buy = np.random.uniform() <= p_buy
+
+                    entry = {
+
+                        "vol": vol,
+
+                        "side": 0 if buy else 1,
+
+                        "time": app.state.current_time
+
+                    }
+
+                    if hist[i, j, c] is None:
+
+                        hist[i, j, c] = [entry]
+
+                    else:
+
+                        hist[i, j, c].append(entry)
+
+                    # determine price
+
+                    if np.random.uniform() <= p_market:
+
+                        # market order
+
+                        price = app.state.expiry_overviews[i, j, c][4] #!!!
+
+                    else:
+
+                        # limit order
+
+                        # distance from ltp is exponentially distributed
+
+                        dist = -np.log(np.random.uniform()) / app.state.option_data.limit_dist
+                        #logging.info(f"LIMIT ORDER DIST: {dist}")
+
+                        price = app.state.asset_ltp + dist if not buy else app.state.asset_ltp - dist
+
+                        
+                    # def place_order(expiry_idx, strike_idx, time, volume, buy, call, price, contract_obs, expiries, strikes):
+                    contract_obs = await loop.run_in_executor(app.state.pool, place_order,
+                            i, j, app.state.current_time, vol, buy, 0 if buy else 1, price, app.state.contract_obs, app.state.expiry_times, app.state.strikes)
+                    
+                    async with app.state.contract_obs_lock:
+                        app.state.contract_obs = contract_obs
 
         else:
-            print('SLEEPING', args[1], "SECONDS")
-            await asyncio.sleep(args[1])
+            M, cand_time = args[1:]
+            await asyncio.sleep((cand_time - app.state.current_time).total_seconds())
+
 
         await asyncio.sleep(app.state.market_data.update_rate)
 

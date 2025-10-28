@@ -14,9 +14,34 @@ $\text{Volume}=b\cdot\text{exp}(-a\cdot\text{ln}(S/K)-c\cdot T)$
 where $a$, $b$ and $c$ are parameters, $S$ is the asset price, $K$ is the strike and $T$ is the time until expiry (years).  
 After seeking to improve this formula, by introducing randomness (I realised my formula was completely deterministic) and using log-moneyness instead, to make sure that distances from either side of ATM were treated equally (I read about this at https://en.wikipedia.org/wiki/Moneyness, and https://quant.stackexchange.com/questions/59421/why-use-moneyness-as-an-axis-on-a-volatility-surface), I'm now using  
 $\text{Volume}=X\cdot b\cdot\text{exp}(-a\cdot |\text{log}(S/K)|-c\cdot T)$  
-I've now added $X\sim\text{lognormal}(\mu_X,\sigma_X)$.  
-### Determining market vs. limit order  
-$\eta=\alpha_0+\sum_i\alpha_ix_i$  
-### Choosing a limit price  
+I've now added $X\sim\text{lognormal}(\mu_X,\sigma_X)$.
+
+### Determining market vs. limit order, buy vs. sell order
+
+Every time an order is accepted from the Hawkes process, we also have to determine whether this will be a buy or sell order and whether the simulation places a limit or market order.    
+For this, I decided to use a generalized linear model, where we use the general formula
+
+$\eta=\beta_0+\sum_i\beta_ix_i$
+
+and then determine the final probability as
+
+$\text{logit}(\eta)=1/(1+e^{-\eta})$
+
+The coefficients $\beta_i$ can both be positive or negative, depending on whether a certain metric would increase or decrease the probability of one of the two possibilities happening.
+
+For the probability of a buy order, we will only use one factor for now:
+-$\x_1$: the imbalance between bids and asks, calculated as $(\text{bids}-\text{asks})/(\text{bids}+\text{asks})$, where $\text{asks}$ and $\text{bids}$ are the aggregate sum over all asks and bids of respectively all current orders in the orderbook.  
+This is because one generally wants more buy orders when buy volume is relatively low, to counteract the surge in sell demand, and vice versa.
+
+For the probability of a limit order, we use the following factors as terms in the linear model:
+
+-$\x_1$: the same imbalance we used in the buy probability calculation  
+-$\x_2$: the current spread of the contract (difference between best bid and ask)  
+-$\x_3$: the recent volume of the contract (over the span of a predetermined time period)  
+This choice comes down to the fact that one wants fewer limit orders when there is a relative balance in the market (meaning not much spread + imbalance).
+The recent volume will negatively impact the probability for a limit order, because  a surge in recent trading volume would increase activity and therefor active participation in the form of more market orders.
+
+### Choosing a limit price
+
 I decided to use a simple model, where I'm just sampling  
 $\text{Limit price}\sim\text{Exp}(\lambda)$
