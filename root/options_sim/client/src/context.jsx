@@ -23,12 +23,12 @@ export const MyContextProvider = ({ children }) => {
     w: 0.5,
     contract_volume_mean: 1.0,
     contract_volume_std: 0.5,
-    expiry_dts: [36000],
+    expiry_dts: [3600 * 24 * 500, 3600 * 24 * 200],
     tau: [[1.0, 1.0], [1.0, 1.0]],
     volume_base: 1.0,
     volume_time_decay: 0.2,
     volume_moneyness: 0.6,
-    strike_dist_pcts: [0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5],
+    strike_dist_pcts: [0, 0.01, 0.02, 0.05, 0.1],
     risk_free: 0.01,
     dividend_rate: 0.0,
     lm_params: [0.0, 0.8, 1.5,-0.5],
@@ -36,8 +36,10 @@ export const MyContextProvider = ({ children }) => {
     limit_dist: 1.0,
     base_scale_init_orders: 1.0,
     moneyness_scale_init_orders: 1.0,
-    time_scale_init_orders: 100.0,
+    time_scale_init_orders: 5.0,
     base_n_orders_init: 5,
+    beta_init: 10,
+    gamma_init: 1.0,
 
     // // asset parameters
     init_open_price: 100.0,
@@ -126,3 +128,4 @@ export const MyContextProvider = ({ children }) => {
 };
 
 export default MyContext;
+// export default MyContextProvider;

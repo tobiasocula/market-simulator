@@ -2,14 +2,14 @@ import httpx
 import asyncio
 from datetime import time, datetime, date, timedelta
 import uvicorn
-from .market import app
+from market import app
 import numpy as np
 import websockets
 import json
 import sys
 import time as truetime
 import pandas as pd
-from .market import baseurl
+from market import baseurl
 
 client = httpx.AsyncClient(timeout=30)
     

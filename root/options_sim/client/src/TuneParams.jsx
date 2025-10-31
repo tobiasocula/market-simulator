@@ -47,7 +47,26 @@ function TuneParams() {
       expiry_dts: "Determines expiry dates for option contracts. In seconds from start time of simuation (eg. 36000 means 10 hours from starting time of simulation).",
       tau: "2x2 matrix determining the impact of one type of contract order exciting the contract order of another. The rows are indexed by the type of the contract\
       that is impacting the second contract, in the formula of the intensity calculation. Eg. tau[0, 1] is the impact of a call contract on a put order, and tau[1, 0]\
-      is the impact of a put order onto a call order. Typically, the impact of put -> put order (which is tau[1, 1]) is greater than the others, because "
+      is the impact of a put order onto a call order. Typically, the impact of put -> put order (which is tau[1, 1]) is greater than the others, because ",
+      volume_base: "Scalar for order volume. Higher means higher base volume. Alongside with contract_volume_mean, this will determine the base volume used for order generation.",
+      volume_time_decay: "Impact on order volume via time decay. Higher means longer expiry contracts will have less volume on average.",
+      volume_moneyness: "Impact on order volume via moneyness. Higher means further ATM contracts will have less volume on average.",
+      strike_dist_pcts: "Distribution of strike prices. A scalar value in the array of 1 means exactly ATM for example.",
+      risk_free: "Risk free rate used for black scholes equation.",
+      dividend_rate: "Dividend rate (from asset) used for black scholes equation.",
+      lm_params: "Parameters for determining probability of limit/market order for each contract order. Parameters (in order): base value, \
+      bid/ask imbalance scalar, bid/ask spread scalar, recent volume scalar. Higher values mean higher probability on limit order in general. Positive/\
+      negative values mean directional probability for limit/market order (eg. negative -> diminishing probability for limit order). A value of 0 means neutral impact.",
+      bs_params: "Parameters for determining probability of buy/sell order for each contract order. Parameters (in order): base value, \
+      imbalance scalar. Higher values mean higher probability on limit order in general",
+      limit_dist: "Parameter used for determining limit distance from theoretical fair price of contract. The limit distance gets calculated using an exponential\
+      random variable with lambda = this parameter.",
+      base_scale_init_orders: "Base scale for price scaling distance for order price calculation, meant for initializing the order books before the simulation starts.",
+      moneyness_scale_init_orders: "Parameter for determining scaling distance for order price calculation. Determines strength of moneyness in calculation.",
+      time_scale_init_orders: "Parameter for determining scaling distance for order price calculation. Determines strength of time decay in calculation",
+      base_n_orders_init: "Base amount of orders to generate for each contract, for initializing order books.",
+      beta_init: "Determines strength of time decay when calculating relative liquidity per contract, for initializing order books.",
+      gamma_init: "Determines strength of moneyness when calculating relative liquidity per contract, for initializing order books."
     };
 
     const [descActive, setDescActive] = useState({
@@ -68,7 +87,22 @@ function TuneParams() {
       contract_volume_mean: false,
       contract_volume_std: false,
       expiry_dts: false,
-      tau: false
+      tau: false,
+      volume_base: false,
+      volume_time_decay: false,
+      volume_moneyness: false,
+      strike_dist_pcts: false,
+      risk_free: false,
+      dividend_rate: false,
+      lm_params: false,
+      bs_params: false,
+      limit_dist: false,
+      base_scale_init_orders: false,
+      moneyness_scale_init_orders: false,
+      time_scale_init_orders: false,
+      base_n_orders_init: false,
+      beta_init: false,
+      gamma_init: false
     });
 
     const [infoAppearing, setInfoAppearing] = useState(false);
@@ -84,7 +118,7 @@ function TuneParams() {
                   display: 'flex', gap: '10px', justifyContent: 'space-between', position: "relative"
                 }}>
                     <div>{key}</div>
-                    <input type="text" value={value} onChange={(e) => setParams((prev) => ({...prev, [key]: e.target.value}))} />
+                    <input type="text" value={value} onChange={(e) => setParams((prev) => ({...prev, [key]: e.target.value}))} disabled={running} />
                     <button onClick={() => {
                       if (infoAppearing) return;
                       setDescActive((prev) => ({...prev, [key]: true}));

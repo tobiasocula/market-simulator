@@ -4,100 +4,39 @@ import "./generalInfo.css";
 
 function GeneralInfo() {
     const MARKET_URL = "http://localhost:8000";
-    const {streamedData, readyToRun, initMarketParams, assetSimData, optionSimData, setStreamedData, running, setRunning} = useContext(MyContext);
+    const {streamedData, params, setStreamedData, running, setRunning} = useContext(MyContext);
 
     async function subscribeData() {
-    
             const uri = "ws://localhost:8000/ws/subscribe_data";
-    
             const socket = new WebSocket(uri);
-    
-           
-    
-            socket.onopen = () => {
-    
-                console.log("Connected to assetdata WebSocket");
-    
-            };
-    
-     
-    
+            socket.onopen = () => console.log("Connected to assetdata WebSocket");
             socket.onmessage = (event) => {
-    
-               
-    
                 try {
-    
                 const message = JSON.parse(event.data);
-                //console.log('NEW DATA');
-                console.log(message);
-    
-     
-    
-                // Update mutable ref immediately with new message data
-    
-     
-    
-                // Then update React state to trigger re-render if needed
-    
                 setStreamedData({
-    
                     overview: message.overview,
-    
                     obs: message.obs,
-    
                     time: message.time,
-    
                     expiries: message.expiries,
-    
                     strikes: message.strikes,
-    
                     assetPriceDrift: message.assetPriceDrift,
-    
                     assetVolaDrift: message.assetVolaDrift
-    
                 });
-    
-                //console.log('STREAMED DATA RESULT:', streamData);
-    
                 } catch (err) {
-    
                 console.error("Error parsing WebSocket message:", err);
-    
                 }
-    
             };
-    
-     
-    
             socket.onclose = (event) => {
-    
                 if (event.wasClean) {
-    
                 console.log(`WebSocket closed cleanly, code=${event.code}, reason=${event.reason}`);
-    
                 } else {
-    
                 console.warn('WebSocket connection closed unexpectedly');
-    
                 }
-    
             };
-    
-     
-    
             socket.onerror = (error) => {
-    
                 console.error("WebSocket error:", error);
-    
             };
-    
-     
-    
-            // for being able to close socket later
-    
             return socket;
-    
             }
 
     return (
@@ -111,29 +50,13 @@ function GeneralInfo() {
             className={!running ? "start-simulation" : "start-simulation-disabled"}
 
             onClick={async () => {
-
-                  // initiate market instance
-
+                // initiate market instance
                 console.log('clicked start simulation button');
-
                 console.log('initializing market')
-
               const initMarketResponse = await fetch(`${MARKET_URL}/init`, {
-
                 method: 'POST',
-
                 headers: { 'Content-Type': 'application/json' },
-
-                body: JSON.stringify({
-
-                  market_data: initMarketParams,
-
-                  option_data: optionSimData,
-
-                  asset_data: assetSimData
-
-              })
-
+                body: JSON.stringify(params)
               });
 
               if (initMarketResponse.status !== 200) {
@@ -143,69 +66,36 @@ function GeneralInfo() {
               }
 
               console.log('initialized market');
-
- 
-
               // start websocket connection
-
-              console.log('subscribing to market data')
-
               await subscribeData();
-
-              console.log('subbed to market data');
-
- 
-
-              // wait for valid connection
-
               const assertConnectionResponse = await fetch(`${MARKET_URL}/assert_connection`);
-
               if (assertConnectionResponse.status !== 200) {
-
                 throw new Error('failed the assert connection', assertConnectionResponse.status);
-
               }
-
               console.log('asserted connection');
-
               setRunning(true);
-
                 }}
 
             disabled={running}
 
           >
 
-            Start Simulation
+            Start
 
           </button>
 
           <button className={running ? "stop-simulation" : "stop-simulation-disabled"} onClick={async () => {
-
- 
-
-            // stop fastapi backends
-
- 
-
             const r = await fetch(`${MARKET_URL}/stop_sim`);
-
             if (r.status !== 200) {
-
               throw new Error('failed to stop sim:', r.status);
-
             }
-
             console.log('stopped sim (market side)');
-
- 
             console.log('reloading..');
-
             window.location.reload();
 
           }} disabled={!running}>
 
-            Stop Simulation
+            Stop
 
           </button>
 

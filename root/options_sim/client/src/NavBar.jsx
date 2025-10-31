@@ -12,6 +12,7 @@ function NavBar() {
             <Link to="/">Settings & Control</Link>
             <Link to="/orderbooks">OrderBooks</Link>
             <Link to="/overview">Overview</Link>
+            
         </div>
     )
 }

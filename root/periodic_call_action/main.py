@@ -1,5 +1,5 @@
 from datetime import time, timedelta
-from .classes import PCAmarket
+from classes import PCAmarket
 import numpy as np
 
 def main():

@@ -15,8 +15,6 @@ function Overview() {
         //console.log('matrix.m.data:', matrix.matrix.data);
     return (
         
-        
-        
         <table border="1">
         <thead>
             <tr>
@@ -26,11 +24,9 @@ function Overview() {
                 <th>volume</th>
                 <th>ltp</th>
                 <th>moneyness</th>
-                <th>open interest</th>
                 <th>iv</th>
                 <th>strike</th>
                 <th>iv</th>
-                <th>open interest</th>
                 <th>moneyness</th>
                 <th>ltp</th>
                 <th>volume</th>
@@ -54,7 +50,6 @@ function Overview() {
 }
 
 console.log('streameddata:', streamedData);
-//console.log('OVERVIEW:', streamedData.overview);
 
     return (
         <>
