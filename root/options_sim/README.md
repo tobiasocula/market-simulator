@@ -18,17 +18,17 @@ The point is that, for a contract defined by (expiry, strike, type) (we denote t
 
 The formula inside of the sum I'm using is, for contract $k$, mark $m$ and current time $t$:
 
-$\lambda_k(t|m)=\mu+\sum_{\hat{i}\in I}\sum_{\hat{j}\in J}\sum_{\hat{c}\in C}\sum_{t_i\lt t}\text{exp}(w\text{log}(V_{\hat{i},\hat{j},\hat{k}})-\gamma_t|T_i{\hat{i}}-T_i|-\gamma_m|\text{log}(K_{\hat{i}}/S)-\text{log}(K_i/S)|-\beta(t-t_{i,j,c}))\cdot\rho_{\text{self}}\cdot\tau_{c,\hat{c}}$
+$\lambda_k(t|m)=\mu+\sum_{\hat{i}\in I}\sum_{\hat{j}\in J}\sum_{\hat{c}\in C}\sum_{t_k\lt t}\text{exp}(w\text{log}(V_{\hat{i},\hat{j},\hat{k}})-\gamma_t|T_i{\hat{i}}-T_i|-\gamma_m|\text{log}(K_{\hat{i}}/S)-\text{log}(K_i/S)|-\beta(t-t_{i,j,c}))\cdot\rho_{\text{self}}\cdot\tau_{c,\hat{c}}$
 
 This is a very long expression, and I will explain each term step-by-step.
 
 First, the sum;
 
-$\sum_{\hat{i}\in I}\sum_{\hat{j}\in J}\sum_{\hat{c}\in C}\sum_{t_i\lt t}$
+$\sum_{\hat{i}\in I}\sum_{\hat{j}\in J}\sum_{\hat{c}\in C}\sum_{t_k\lt t}$
 
-Simply sums over all contracts, with expiry $i$, strike price $j$ and type (call or put) $c$. One may also write this as
+Simply sums over all contracts, with expiry $i$, strike price $j$ and type (call or put) $c$, and for each contract sum over all previous timestamps $t_k$ where a past event has happened (being having sent an order). One may also write this as
 
-$\sum_{c\in\text{Contracts}}$
+$\sum_{c\in\text{Contracts}}\sum_{t_k\lt t}$
 
 Then we discuss every factor in the sum.
 

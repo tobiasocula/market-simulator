@@ -232,8 +232,18 @@ async def init(data: Params):
     app.state.num_expiries = M
 
     # track statistics
-    app.state.buy_sell_counts = np.zeros((M, N, 2))
-    app.state.limit_market_counts = np.zeros((M, N, 2))
+    app.state.buy_sell_counts = []
+    app.state.limit_market_counts = []
+    for i in range(N):
+        a_1 = []
+        b_1 = []
+        for j in range(M):
+            a_1.append([0, 0])
+            b_1.append([0, 0])
+
+        app.state.limit_market_counts.append(a_1)
+        app.state.buy_sell_counts.append(b_1)
+
 
     app.state.current_time = datetime.strptime(data.start_time, "%Y-%m-%d %H:%M:%S")
     app.state.params = data
@@ -527,8 +537,8 @@ async def option_trade_cycle_coro():
                     else:
                         hist[i, j, c].append(entry)
 
-                    app.state.buy_sell_counts[i, j, c] = (app.state.buy_sell_counts[i, j, c] * order_counter + p_buy) / (order_counter + 1)
-                    app.state.limit_market_counts[i, j, c] = (app.state.limit_market_counts[i, j, c] * order_counter + p_market) / (order_counter + 1)
+                    app.state.buy_sell_counts[i][j][c] = (app.state.buy_sell_counts[i][j][c] * order_counter + p_buy) / (order_counter + 1)
+                    app.state.limit_market_counts[i][j][c] = (app.state.limit_market_counts[i][j][c] * order_counter + p_market) / (order_counter + 1)
 
                     order_counter += 1
 
@@ -617,18 +627,7 @@ async def assert_connection():
     while not app.state.ws_connected.is_set():
         await asyncio.sleep(app.state.params.update_rate)
 
-def format_prob_struct(bs, lm, n, m):
-    puts_buys = []
-    calls_buys = []
-    puts_limits = []
-    calls_limits = []
-    for i in range(n):
-        puts_buys.append([bs[i, j, 0] for j in range(m)])
-        calls_buys.append([bs[i, j, 1] for j in range(m)])
-        puts_limits.append([lm[i, j, 0] for j in range(m)])
-        calls_limits.append([lm[i, j, 1] for j in range(m)])
 
-    return puts_buys, calls_buys, puts_limits, calls_limits
 
 
 @app.websocket("/ws/subscribe_data")
@@ -636,7 +635,6 @@ async def subscribe_data(websocket: WebSocket):
     await websocket.accept()
     while True:
         try:
-            pb, cb, pl, cl= format_prob_struct(app.state.buy_sell_counts, app.state.limit_market_counts, app.state.num_expiries, app.state.num_strikes)
             await websocket.send_json({
                 "overview": format_overview(app.state.expiry_overviews),
                 "obs": format_obs(app.state.contract_obs),
@@ -645,8 +643,8 @@ async def subscribe_data(websocket: WebSocket):
                 "strikes": app.state.strikes.tolist(),
                 "assetPriceDrift": app.state.asset_price_drift,
                 "assetVolaDrift": app.state.asset_vola_drift,
-                "limit_market_probs": [cl, pl],
-                "buy_sell_probs": [cb, pb]
+                "limit_market_probs": app.state.limit_market_counts,
+                "buy_sell_probs": app.state.buy_sell_counts
             })
             app.state.ws_connected.set()
             await asyncio.sleep(app.state.params.update_rate)

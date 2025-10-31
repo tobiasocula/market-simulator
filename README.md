@@ -20,6 +20,10 @@ The market is represented as a FastAPI backend. The open price gets calculated i
 
 This uses a React frontend application alongside with the FastAPI backend, meaning one can see the order book get updated in real time. There are also two order generation algorithms being used.
 
+![alt text](image.png)
+
+![alt text](image-1.png)
+
 ### 4. Option contracts simulation
 
 Here I implement a real-time option chain market, where I use a Hawkes process to simulate real-time market trading activity. This also has a frontend GUI application where one can see real-time orderbooks, overviews and statistics, and tune the parameters.
