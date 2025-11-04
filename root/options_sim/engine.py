@@ -216,7 +216,7 @@ async def init(data: Params):
     app.state.contract_obs_lock = asyncio.Lock()
     app.state.recent_vol_lock = asyncio.Lock()
 
-    app.state.recent_vol_delta = timedelta(seconds=5) # "recent volume" time window
+    app.state.recent_vol_delta = timedelta(seconds=50) # "recent volume" time window
 
     app.state.strikes = np.array(
         sorted(list(set(
@@ -225,6 +225,8 @@ async def init(data: Params):
             [round(data.init_open_price * (1 - a)) for a in data.strike_dist_pcts]
             )))
         )
+    
+    
 
     N = len(app.state.strikes)
     M = len(data.expiry_dts)
@@ -232,24 +234,16 @@ async def init(data: Params):
     app.state.num_expiries = M
 
     # track statistics
-    app.state.buy_sell_counts = []
-    app.state.limit_market_counts = []
-    for i in range(N):
-        a_1 = []
-        b_1 = []
-        for j in range(M):
-            a_1.append([0, 0])
-            b_1.append([0, 0])
-
-        app.state.limit_market_counts.append(a_1)
-        app.state.buy_sell_counts.append(b_1)
-
+    app.state.recent_volume_sums = [[[0, 0] for _ in range(N)] for _ in range(M)]
+    app.state.buy_sell_counts = [[[0, 0] for _ in range(N)] for _ in range(M)]
+    app.state.limit_market_counts = [[[0, 0] for _ in range(N)] for _ in range(M)]
+    app.state.total_orders = [[[0, 0] for _ in range(N)] for _ in range(M)]
 
     app.state.current_time = datetime.strptime(data.start_time, "%Y-%m-%d %H:%M:%S")
     app.state.params = data
 
     app.state.recent_volume = np.empty((M, N, 2), dtype=object) # list of dicts: [{"time": time, "value": value}, ...]
-    app.state.recent_volume_sums = np.zeros((M, N, 2))
+    
 
     app.state.expiry_times = [
         app.state.current_time + timedelta(seconds=t)
@@ -375,7 +369,7 @@ async def pauze():
             t.cancel()
         app.state.pauzed = True
 
-def option_trade_cycle(params, num_expiries, num_strikes, current_time, strikes, asset_ltp, expiry_times, recent_volume_sums, expiry_overviews, M):
+def option_trade_cycle(params, num_expiries, num_strikes, current_time, strikes, asset_ltp, expiry_times, M):
     hist = np.empty((num_expiries, num_strikes, 2), dtype=object)
     args = []
     for i in range(num_expiries):
@@ -429,20 +423,21 @@ async def recent_volume_checking_coro():
 def recent_volume_checking(num_expiries, num_strikes, recent_volume, current_time, recent_vol_delta):
 
     new_vol_arr = np.full((num_expiries, num_strikes, 2), None)
-    new_vol_arr_sum = np.zeros((num_expiries, num_strikes, 2))
+    new_vol_arr_sum = [[[0, 0] for _ in range(num_strikes)] for _ in range(num_expiries)]
     for i in range(num_expiries):
         for j in range(num_strikes):
             for k in range(2):
                 if recent_volume[i, j, k] is None:
                     continue
                 for entry in recent_volume[i, j, k]:
-                    if entry["time"] - current_time <= recent_vol_delta:
+                    print('entry time:', entry["time"])
+                    if current_time - entry["time"] <= recent_vol_delta:
+                        new_vol_arr_sum[i][j][k] += entry["value"]
                         if new_vol_arr[i, j, k] is None:
                             new_vol_arr[i, j, k] = [entry]
                         else:
                             new_vol_arr[i, j, k].append(entry)
-                    else:
-                        new_vol_arr_sum[i, j, k] += entry["value"]
+                        
 
         return new_vol_arr, new_vol_arr_sum
 
@@ -477,8 +472,7 @@ async def option_trade_cycle_coro():
         #print('in while loop')
         args = await loop.run_in_executor(app.state.pool, option_trade_cycle, 
                     app.state.params, app.state.num_expiries, app.state.num_strikes,
-                    app.state.current_time, app.state.strikes, app.state.asset_price_drift, app.state.expiry_times,
-                    app.state.recent_volume_sums, app.state.expiry_overviews, M
+                    app.state.current_time, app.state.strikes, app.state.asset_price_drift, app.state.expiry_times, M
         )
         
         if args[0]:
@@ -516,7 +510,7 @@ async def option_trade_cycle_coro():
                         app.state.params.lm_params[0]
                         + app.state.params.lm_params[1] * imb
                         + app.state.params.lm_params[2] * spread
-                        + app.state.params.lm_params[3] * app.state.recent_volume_sums[i, j, c] # recent volume
+                        + app.state.params.lm_params[3] * app.state.recent_volume_sums[i][j][c] # recent volume
                     )
                     p_market = 1 / (1 + np.exp(-eta_lm)) # prob for market order
 
@@ -537,8 +531,10 @@ async def option_trade_cycle_coro():
                     else:
                         hist[i, j, c].append(entry)
 
-                    app.state.buy_sell_counts[i][j][c] = (app.state.buy_sell_counts[i][j][c] * order_counter + p_buy) / (order_counter + 1)
-                    app.state.limit_market_counts[i][j][c] = (app.state.limit_market_counts[i][j][c] * order_counter + p_market) / (order_counter + 1)
+                    #app.state.buy_sell_counts[i][j][c] = round(float(app.state.buy_sell_counts[i][j][c] * order_counter + p_buy) / (order_counter + 1), ndigits=2)
+                    #app.state.limit_market_counts[i][j][c] = round(float(app.state.limit_market_counts[i][j][c] * order_counter + p_market) / (order_counter + 1), ndigits=2)
+                    app.state.buy_sell_counts[i][j][c] = round(p_buy, ndigits=2)
+                    app.state.limit_market_counts[i][j][c] = round(p_market, ndigits=2)
 
                     order_counter += 1
 
@@ -634,6 +630,7 @@ async def assert_connection():
 async def subscribe_data(websocket: WebSocket):
     await websocket.accept()
     while True:
+        #print(app.state.recent_volume[0, 4, 0])
         try:
             await websocket.send_json({
                 "overview": format_overview(app.state.expiry_overviews),
@@ -644,7 +641,9 @@ async def subscribe_data(websocket: WebSocket):
                 "assetPriceDrift": app.state.asset_price_drift,
                 "assetVolaDrift": app.state.asset_vola_drift,
                 "limit_market_probs": app.state.limit_market_counts,
-                "buy_sell_probs": app.state.buy_sell_counts
+                "buy_sell_probs": app.state.buy_sell_counts,
+                "recent_volume": app.state.recent_volume_sums,
+                "total_orders": app.state.total_orders
             })
             app.state.ws_connected.set()
             await asyncio.sleep(app.state.params.update_rate)
@@ -718,7 +717,7 @@ def implied_vol_call(C_mkt, S, K, T, r, q):
         raise
 
 
-def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, strikes, expiries, asset_price_drift):
+def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, strikes, expiries, asset_price_drift, total_volume):
     logging.info("trade checking called")
     s = contract_obs.shape
     for i in range(s[0]):
@@ -764,6 +763,9 @@ def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, 
                         recent_volume[i, j, k] = [{"time": current_time, "value": contract_obs[i, j, k, 1][0][1]}]
                     else:
                         recent_volume[i, j, k].append({"time": current_time, "value": contract_obs[i, j, k, 1][0][1]})
+
+                    total_volume[i][j][k] += contract_obs[i, j, k, 1][0][1]
+
                     # subtract trade vol
                     contract_obs[i, j, k, 0][0][1] -= contract_obs[i, j, k, 1][0][1]
                     # remove best ask
@@ -785,6 +787,9 @@ def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, 
                         recent_volume[i, j, k] = [{"time": current_time, "value": contract_obs[i, j, k, 0][0][1]}]
                     else:
                         recent_volume[i, j, k].append({"time": current_time, "value": contract_obs[i, j, k, 0][0][1]})
+
+                    total_volume[i][j][k] += contract_obs[i, j, k, 0][0][1]
+                    
                     # subtract trade vol
                     contract_obs[i, j, k, 1][0][1] -= contract_obs[i, j, k, 0][0][1]
                     # remove best bid
@@ -807,20 +812,23 @@ def trade_checking(contract_obs, current_time, expiry_overviews, recent_volume, 
                         recent_volume[i, j, k] = [{"time": current_time, "value": contract_obs[i, j, k, 0][0][1]}]
                     else:
                         recent_volume[i, j, k].append({"time": current_time, "value": contract_obs[i, j, k, 0][0][1]})
+
+                    total_volume[i][j][k] += contract_obs[i, j, k, 0][0][1]
+
                     # remove best bid
                     contract_obs[i, j, k, 0] = contract_obs[i, j, k, 0][1:]
                     # remove best ask
                     contract_obs[i, j, k, 1] = contract_obs[i, j, k, 1][1:]
 
-    return contract_obs, expiry_overviews, recent_volume
+    return contract_obs, expiry_overviews, recent_volume, total_volume
 
 async def trade_checking_coro():
     loop = asyncio.get_event_loop()
     logging.info("trade checking coro called")
     while True:
-        contract_obs, expiry_overviews, recent_volume = await loop.run_in_executor(app.state.pool, trade_checking, 
+        contract_obs, expiry_overviews, recent_volume, total_volume = await loop.run_in_executor(app.state.pool, trade_checking, 
                 app.state.contract_obs, app.state.current_time, app.state.expiry_overviews, app.state.recent_volume, app.state.strikes,
-                app.state.expiry_times, app.state.asset_price_drift
+                app.state.expiry_times, app.state.asset_price_drift, app.state.total_orders
             )
         logging.info("trade checking coro; info returned")
         async with app.state.contract_obs_lock:
@@ -829,5 +837,6 @@ async def trade_checking_coro():
             app.state.expiry_overviews = expiry_overviews
         async with app.state.recent_vol_lock:
             app.state.recent_volume = recent_volume
+        app.state.total_orders = total_volume
         logging.info("trade checking coro; updated params")
         await asyncio.sleep(app.state.params.update_rate)

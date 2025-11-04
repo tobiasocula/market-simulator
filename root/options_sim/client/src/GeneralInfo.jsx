@@ -20,7 +20,11 @@ function GeneralInfo() {
                     expiries: message.expiries,
                     strikes: message.strikes,
                     assetPriceDrift: message.assetPriceDrift,
-                    assetVolaDrift: message.assetVolaDrift
+                    assetVolaDrift: message.assetVolaDrift,
+                    buySellProbs : message.buy_sell_probs,
+                    limitMarketProbs: message.limit_market_probs,
+                    recentVolume: message.recent_volume,
+                    totalOrders: message.total_orders
                 });
                 } catch (err) {
                 console.error("Error parsing WebSocket message:", err);
